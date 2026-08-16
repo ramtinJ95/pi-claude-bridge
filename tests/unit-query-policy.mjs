@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import ts from "typescript";
 import {
 	ASKCLAUDE_FULL_DISALLOWED_TOOLS,
 	ASKCLAUDE_READ_TOOLS,
@@ -12,6 +13,15 @@ import {
 	resolveProviderPermissionPolicy,
 	summarizeManagedPolicy,
 } from "../src/query-policy.js";
+
+function topLevelFunctionSource(source, name) {
+	const file = ts.createSourceFile("src/index.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const declaration = file.statements.find(
+		(statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+	);
+	assert.ok(declaration, `${name} is missing from src/index.ts`);
+	return declaration.getText(file);
+}
 
 describe("Claude query permission policy", () => {
 	it("defaults every query path to auto", () => {
@@ -105,16 +115,33 @@ describe("Claude query permission policy", () => {
 	});
 
 	it("wires all extension query paths through resolved policy", () => {
-		const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-		const resolvedAssignments = source.match(
-			/permissionMode:\s*(?:permissionPolicy|delegationPolicy)\.permissionMode/g,
-		) ?? [];
+		const srcDir = new URL("../src/", import.meta.url);
+		const allSource = readdirSync(srcDir)
+			.filter((name) => name.endsWith(".ts"))
+			.map((name) => readFileSync(new URL(name, srcDir), "utf8"))
+			.join("\n");
+		const indexSource = readFileSync(new URL("index.ts", srcDir), "utf8");
+		const compaction = topLevelFunctionSource(indexSource, "runIsolatedSummary");
+		const provider = topLevelFunctionSource(indexSource, "streamClaudeAgentSdk");
+		const delegation = topLevelFunctionSource(indexSource, "promptAndWait");
 
-		assert.equal(resolvedAssignments.length, 3, "provider, compaction, and delegation must all use resolved policy");
-		assert.doesNotMatch(source, /permissionMode:\s*["'][^"']+["']/,
+		assert.doesNotMatch(allSource, /permissionMode:\s*["'][^"']+["']/,
 			"an extension query path hard-codes a permission mode");
-		assert.doesNotMatch(source, /canUseTool\s*:/,
+		assert.doesNotMatch(allSource, /canUseTool\s*:/,
 			"the bridge must not override Claude or organization permission decisions");
+
+		assert.match(compaction, /resolveProviderPermissionPolicy\(compactProviderSettings\)/,
+			"compaction does not resolve provider permission policy");
+		assert.match(compaction, /permissionMode:\s*permissionPolicy\.permissionMode/,
+			"compaction does not apply resolved permission policy");
+		assert.match(provider, /resolveProviderPermissionPolicy\(providerSettings\)/,
+			"provider does not resolve permission policy");
+		assert.match(provider, /permissionMode:\s*permissionPolicy\.permissionMode/,
+			"provider does not apply resolved permission policy");
+		assert.match(delegation, /resolveDelegationPolicy\(mode,/,
+			"delegation does not resolve capability and permission policy");
+		assert.match(delegation, /permissionMode:\s*delegationPolicy\.permissionMode/,
+			"delegation does not apply resolved permission policy");
 	});
 });
 

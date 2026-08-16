@@ -93,6 +93,14 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 - `permissionMode` — Claude Code permission policy for provider queries and isolated summaries (default `"auto"`). The bridge does not install a host callback that overrides denials; Claude settings and managed policy may therefore reject Pi MCP calls.
 - `pathToClaudeCodeExecutable` — path to the `claude` binary. Useful if your OS/filesystem has the SDK's bundled musl/glibc binaries in a place where they can't run. For example, with Nix you can set the binary to e.g. `"/home/you/.nix-profile/bin/claude"`.
 
+If a provider tool is denied, allow its exact Claude-side MCP alias in Claude
+permission settings (for example, `mcp__custom-tools__read`) or explicitly choose
+a different `provider.permissionMode`. Organization-managed permission rules may
+require an administrator to add the grant. The bridge deliberately does not pass
+`allowedTools` for every Pi tool: doing so would auto-approve the entire Pi tool
+inventory and make the configured provider permission mode nominal rather than
+effective.
+
 Capability and permission are independent: `mode` controls which tools exist,
 while `permissionMode` controls how Claude Code governs calls to those tools.
 Claude Code may replace the requested permission mode because of user, project,

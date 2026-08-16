@@ -48,8 +48,8 @@ const TOOL_USE_ID_META = "claudecode/toolUseId";
 /** Options every provider-path query shares, so a test only states its own subject. */
 function providerOptions(extra = {}) {
 	// These tests characterize MCP transport mechanics, not permission policy.
-	// Explicitly authorize only their fixture tools so managed workstation policy
-	// cannot prevent the tool calls needed to prove pairing and schema behavior.
+	// Explicitly authorize only their fixture tools where workstation policy
+	// permits, so the calls can prove pairing and schema behavior.
 	// Production deliberately installs no canUseTool override.
 	const providerTools = new Set([
 		"mcp__custom-tools__alpha",

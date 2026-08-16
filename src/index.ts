@@ -1285,12 +1285,16 @@ async function consumeQuery(
 				permission_denials?: Array<{ tool_name: string; tool_use_id: string }>;
 			}).permission_denials ?? [];
 			if (permissionDenials.length) {
+				const deniedTools = permissionDenials
+					.slice(0, 3)
+					.map((denial) => denial.tool_name)
+					.join(", ");
 				debug("provider: permission denials", JSON.stringify(permissionDenials.map((denial) => ({
 					toolName: denial.tool_name,
 					toolUseId: denial.tool_use_id,
 				}))));
 				piUI?.notify(
-					`Claude Code denied ${permissionDenials.length} provider tool call(s); check permission settings or managed policy.`,
+					`Claude Code denied provider tool${permissionDenials.length === 1 ? "" : "s"} ${deniedTools}. Allow the required MCP aliases in Claude permission settings or adjust provider.permissionMode; managed policy may require an administrator.`,
 					"warning",
 				);
 			}
@@ -1316,14 +1320,14 @@ async function consumeQuery(
 		}
 		if (message.type === "system" && message.subtype === "init") {
 			const observation = observePermissionMode(requestedPermissionMode, message.permissionMode);
-			const managedPolicy = await managedPolicyPromise;
 			if (observation) {
 				debug("provider: permission mode",
 					`requested=${observation.requested} effective=${observation.effective}`,
-					`overridden=${observation.overridden}`,
-					`managed=${managedPolicyLabels(managedPolicy).join(",") || "not-observed"}`);
+					`overridden=${observation.overridden}`);
 				if (observation.overridden) {
+					const managedPolicy = await managedPolicyPromise;
 					const policyDetail = managedPolicyLabels(managedPolicy);
+					debug("provider: observed managed policy", policyDetail.join(",") || "not-observed");
 					const noticeKey = `${observation.requested}->${observation.effective}:${policyDetail.join("|")}`;
 					if (!shownProviderPermissionOverrides.has(noticeKey)) {
 						shownProviderPermissionOverrides.add(noticeKey);
@@ -2277,10 +2281,14 @@ export default function (pi: ExtensionAPI) {
 
 				if (details?.executionTime) text += ` ${theme.fg("dim", `${(details.executionTime / 1000).toFixed(1)}s`)}`;
 				if (details?.actions) text += ` ${theme.fg("muted", details.actions)}`;
-				const permissionLabel = details?.permission?.overridden
-					? `${details.permission.requested}→${details.permission.effective}`
-					: details?.permission?.effective ?? askPermissionMode;
-				text += ` ${theme.fg(details?.permission?.overridden ? "warning" : "dim", `permission=${permissionLabel}`)}`;
+				if (details?.permission) {
+					const permissionLabel = details.permission.overridden
+						? `${details.permission.requested}→${details.permission.effective}`
+						: details.permission.effective;
+					text += ` ${theme.fg(details.permission.overridden ? "warning" : "dim", `permission=${permissionLabel}`)}`;
+				} else {
+					text += ` ${theme.fg("dim", `requested=${askPermissionMode}`)}`;
+				}
 				if (details?.permissionDenials?.length) {
 					text += ` ${theme.fg("warning", `${details.permissionDenials.length} denied`)}`;
 				}

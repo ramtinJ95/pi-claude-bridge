@@ -380,6 +380,12 @@ permission rules may grant access, and managed network/read restrictions apply.
 As a result, provider MCP tools remain denied unless organization policy permits
 them. The bridge must report this state; it must not install a `canUseTool`
 callback or other host-side override merely to make the provider appear to work.
+It also deliberately does not pass every Pi MCP alias through the SDK's
+`allowedTools`: that would auto-approve the provider's whole tool inventory on
+unmanaged machines and make `provider.permissionMode` nominal. Users may grant
+specific aliases such as `mcp__custom-tools__read` in Claude permission settings;
+when managed permission rules are exclusive, an administrator must make that
+grant.
 
 ### Phase 2: normalized events and richer blocking UI
 
