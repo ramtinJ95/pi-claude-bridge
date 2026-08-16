@@ -25,7 +25,9 @@ const PREFER_DIRECT = "Prefer to handle straightforward tasks yourself.";
  * runtime from each inventing their own default.
  */
 export function buildAskClaudeContract(config: Config["askClaude"] = {}): AskClaudeContract {
-	const allowFull = config?.allowFullMode !== false;
+	// Full mode is available by default, but malformed JSON must not become an
+	// accidental opt-in. Only the documented boolean true (or omission) enables it.
+	const allowFull = config?.allowFullMode === undefined || config.allowFullMode === true;
 	// Config is parsed from JSON without runtime schema validation. Treat an
 	// unknown value as read rather than letting it miss every denylist preset.
 	const configuredMode = isAskClaudeMode(config?.defaultMode)
@@ -36,7 +38,9 @@ export function buildAskClaudeContract(config: Config["askClaude"] = {}): AskCla
 	const defaultMode = !allowFull && configuredMode === "full"
 		? DEFAULT_ASKCLAUDE_MODE
 		: configuredMode;
-	const defaultIsolated = config?.defaultIsolated ?? DEFAULT_ASKCLAUDE_ISOLATED;
+	const defaultIsolated = typeof config?.defaultIsolated === "boolean"
+		? config.defaultIsolated
+		: DEFAULT_ASKCLAUDE_ISOLATED;
 	const modeValues = allowFull
 		? ["read", "full", "none"] as const
 		: ["read", "none"] as const;

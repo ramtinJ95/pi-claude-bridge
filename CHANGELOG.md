@@ -2,7 +2,7 @@
 
 ## UNRELEASED
 
-- **Fix: AskClaude descriptions reflect configured defaults** — model-facing parameter text, the top-level tool description, and TUI tags now report the effective `defaultMode` and `defaultIsolated` values instead of hard-coding read/shared defaults. `allowFullMode: false` also prevents a configured full default from bypassing the lockout when `mode` is omitted, and invalid JSON mode values fail closed to read mode.
+- **Fix: AskClaude descriptions reflect configured defaults** — model-facing parameter text, the top-level tool description, and TUI tags now report the effective `defaultMode` and `defaultIsolated` values instead of hard-coding read/shared defaults. `allowFullMode: false` also prevents a configured full default from bypassing the lockout when `mode` is omitted, and malformed JSON mode, full-mode, and isolation values resolve to safe package defaults.
 - **Fix: better isolate AskClaude tool (issue #59)** — AskClaude children no longer inherit the user's `~/.claude` `CLAUDE.md` files or skill listing, and now always get Claude Code's system prompt preset instead of only when pi-side skills exist. Thanks @JAtkinsonKO.
 - **Fix: Bogus debug message about "record count mismatch" after switching providers** — the post-rebuild integrity check did not take `@file` expansion into account when switching providers.
 

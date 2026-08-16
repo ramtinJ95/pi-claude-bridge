@@ -63,6 +63,22 @@ describe("AskClaude model-facing contract", () => {
 		assert.match(contract.modeDescription, /"read" \(default\)/);
 		assert.doesNotMatch(contract.toolDescription, /full mode/);
 	});
+
+	it("fails a malformed allowFullMode closed", () => {
+		const contract = buildAskClaudeContract({ allowFullMode: "false" });
+
+		assert.equal(contract.allowFull, false);
+		assert.deepEqual(contract.modeValues, ["read", "none"]);
+		assert.doesNotMatch(contract.modeDescription, /"full"/);
+	});
+
+	it("uses the package isolation default for malformed JSON", () => {
+		const contract = buildAskClaudeContract({ defaultIsolated: "false" });
+
+		assert.equal(contract.defaultIsolated, false);
+		assert.match(contract.promptDescription, /full conversation history/);
+		assert.match(contract.isolatedDescription, /Defaults to false\./);
+	});
 });
 
 describe("AskClaude call tags", () => {
