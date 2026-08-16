@@ -59,9 +59,7 @@ export function createRpcHarness(opts) {
 
 	const RPC_LOG = `${LOGDIR}/${name}.log`;
 	const DEBUG_LOG = `${LOGDIR}/${name}-debug.log`;
-
-	// Strip any local node_modules from PATH so we use the globally-installed `pi`.
-	const cleanPath = process.env.PATH.split(":").filter((p) => !p.includes("node_modules")).join(":");
+	const piBin = resolve(DIR, "node_modules/.bin/pi");
 
 	let pi, rpcLog;
 	let stopped = false;
@@ -77,10 +75,10 @@ export function createRpcHarness(opts) {
 		stopped = false;
 		rpcLog = createWriteStream(RPC_LOG, { flags: "a" });
 		const spawnArgs = ["--no-session", "-ne", "-e", DIR, "--mode", "rpc", ...args];
-		pi = spawn("pi", spawnArgs, {
+		pi = spawn(piBin, spawnArgs, {
 			cwd,
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, PATH: cleanPath, CLAUDE_BRIDGE_DEBUG: "1", CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG, ...env },
+			env: { ...process.env, CLAUDE_BRIDGE_DEBUG: "1", CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG, ...env },
 		});
 
 		// The killed subprocess can still flush buffered stdout/stderr after stop()

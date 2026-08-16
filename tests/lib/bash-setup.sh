@@ -15,10 +15,18 @@ if [[ -f "$__ENV_FILE" ]]; then
 	set +a
 fi
 
-# Strip node_modules/.bin from PATH so we use the system pi, not the vendored one.
-__clean_path() {
-	echo "$PATH" | tr ':' '\n' | grep -v node_modules | tr '\n' ':'
-}
+# macOS does not ship GNU timeout. Prefer the native command when available,
+# then Homebrew's gtimeout, and finally Perl's exec-preserving alarm. The test
+# cleanup trap reaps descendants after a timeout.
+if ! command -v timeout >/dev/null 2>&1; then
+	if command -v gtimeout >/dev/null 2>&1; then
+		timeout() { gtimeout "$@"; }
+	else
+		timeout() {
+			perl -e '$seconds = shift @ARGV; alarm $seconds; exec @ARGV; die "exec failed: $!\n"' "$@"
+		}
+	fi
+fi
 
 # Setup standard test environment.
 # Usage: setup_test_env "test-name"
@@ -41,8 +49,10 @@ setup_test_env() {
 		LOGFILE=""
 	fi
 
-	# Clean PATH and run pi from the project root so project-local config is visible.
-	PATH=$(__clean_path)
+	# Exercise the exact Pi version pinned by this repository, not whichever
+	# global CLI happens to be installed. Run from the project root so local
+	# config remains visible.
+	PATH="$DIR/node_modules/.bin:$PATH"
 	cd "$DIR"
 
 	# Export for use in tests
