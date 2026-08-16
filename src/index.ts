@@ -151,6 +151,18 @@ function diagDump(label: string, data: Record<string, unknown>) {
 // registration can occur for the next session.
 const ACTIVE_STREAM_SIMPLE_KEY = Symbol.for("claude-bridge:activeStreamSimple");
 
+// Pi >=0.84.2 requires custom streamSimple providers to support request and
+// response lifecycle hooks. The Agent SDK exposes neither the final wire
+// payload nor the HTTP response, so the bridge cannot implement either hook's
+// replacement/observation contract faithfully. Keep this explicit and tested:
+// calling a hook with a made-up payload or response would be worse than an
+// honest compatibility limitation. See docs/PI-084-COMPATIBILITY.md.
+const PROVIDER_HOOK_SUPPORT = Object.freeze({
+	reviewedAgentSdk: "0.2.141",
+	onPayload: false,
+	onResponse: false,
+});
+
 // Claude Code's own builtin tools, for the AskClaude path where CC really runs
 // them. The provider path never sees these — it starts CC with `tools: []`.
 const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
@@ -748,6 +760,7 @@ export const __test = {
 	CC_CHILD_ENV,
 	buildMcpServers,
 	branchSummaryOutcome,
+	PROVIDER_HOOK_SUPPORT,
 };
 
 // --- Provider helpers: tool name mapping ---

@@ -11,7 +11,8 @@
 // as soon as the message they care about arrives. Run the whole file on every
 // @anthropic-ai/claude-agent-sdk or Claude Code bump.
 //
-// Verified against: SDK 0.2.141 / Claude Code 2.1.222.
+// The installed SDK and its bundled Claude Code version are printed below so
+// every integration run records the exact runtime it characterized.
 //
 // Assumptions that are NOT covered here, and why:
 //   - DISABLE_AUTO_COMPACT=1 stops CC-side autocompaction. Provoking it needs a
@@ -32,6 +33,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createSession, openSession, repairToolPairing } from "cc-session-io";
+import { formatRuntimeVersions } from "./lib/runtime-versions.mjs";
+
+console.log(`Runtime: ${formatRuntimeVersions()}`);
 
 const CWD = process.cwd();
 const MODEL = "claude-haiku-4-5";

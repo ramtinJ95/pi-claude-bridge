@@ -21,6 +21,8 @@ Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/
 pi install npm:pi-claude-bridge
 ```
 
+This fork requires Pi 0.84.2 or newer and Node.js 22.19 or newer.
+
 ## Provider
 
 Use `/model` to select `claude-bridge/claude-fable-5`, `claude-bridge/claude-opus-5`, `claude-bridge/claude-opus-4-8`, `claude-bridge/claude-opus-4-7`, `claude-bridge/claude-opus-4-6`, `claude-bridge/claude-sonnet-5`, `claude-bridge/claude-sonnet-4-6`, or `claude-bridge/claude-haiku-4-5`.
@@ -96,6 +98,10 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 
 `npm run test:unit` for offline tests (`tests/unit-*.mjs`: queue, import, skills). 
 
+The offline suite also launches the repository-local Pi 0.84.2 CLI to verify
+that the extension loads and registers its provider. Test output records the
+installed Pi, Agent SDK, and bundled Claude Code versions.
+
 `npm test` for the full suite, which adds integration tests that hit APIs (`tests/int-*.{sh,mjs}`: smoke, multi-turn, cache, session-resume, session-rebuild, tool-message). Set `CLAUDE_BRIDGE_TESTING_ALT_MODEL` in `.env.test` for the alt-provider smoke test (e.g. `openrouter/z-ai/glm-4.7-flash`).
 
 Integration tests spawn real `pi` and Claude Code subprocesses, so they need write access to `~/.claude` for CC's session state — a sandbox that blocks it makes the next turn's `--resume` fail with `No conversation found with session ID`. The RPC harness probes for this at startup and fails fast.
@@ -110,6 +116,14 @@ Set `CLAUDE_BRIDGE_DEBUG=1` to enable debug output:
 When filing a bug about a session-resume failure (e.g. "No conversation found"), the most useful attachments are the `syncResult:` lines from the bridge log plus the matching `cc-cli-logs/` file for the failing query.
 
 ## Known issues
+
+**Pi provider request/response hooks are not available through the Agent SDK.**
+Claude Bridge cannot faithfully implement Pi 0.84.2's `onPayload` replacement
+or `onResponse` observation contracts because the Agent SDK exposes neither the
+final wire payload nor the underlying HTTP response. It does not fabricate
+either one. This means `before_provider_request` and `after_provider_response`
+extensions do not observe bridge traffic. See
+[Pi 0.84 compatibility baseline](docs/PI-084-COMPATIBILITY.md).
 
 **Sessions get rebuilt more often than they need to be, and a rebuild is expensive.** The bridge rewrites Claude Code's session from pi's history whenever pi's messages move underneath it — after an abort, `/compact`, tree navigation, or an API error. Measured over this repo's own bridge log, a rebuild boundary loses the prompt cache roughly 58% of the time against 26% for a plain resume, so an abort-heavy session costs noticeably more than a clean one. Aborts alone are 46% of rebuilds.
 
