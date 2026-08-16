@@ -5,6 +5,7 @@
 // returned) so the extension always starts.
 
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 
@@ -20,12 +21,16 @@ export interface Config {
 		defaultIsolated?: boolean;
 		allowFullMode?: boolean;
 		appendSkills?: boolean;
+		/** How Claude Code governs tools within the selected capability mode. */
+		permissionMode?: PermissionMode;
 	};
 	/** Low-level Claude Agent SDK plumbing. Most users won't need these. */
 	provider?: {
 		strictMcpConfig?: boolean;
 		autoMemoryEnabled?: boolean;
 		pathToClaudeCodeExecutable?: string;
+		/** How Claude Code governs Pi's MCP tools. Managed settings still win. */
+		permissionMode?: PermissionMode;
 		// Subscription plan tier. Setting to "max" enables Opus 4.6 at 1M context
 		plan?: "pro" | "max";
 		// Set to true to opt into metered 1M context usage ("extra usage" in

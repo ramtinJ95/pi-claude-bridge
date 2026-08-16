@@ -46,10 +46,10 @@ You could also create skills or add something to AGENTS.md to e.g. "Always call 
 ### Parameters
 
 - **`prompt`** — the question or task for Claude Code
-- **`mode`** — `read` (default, read files and search/fetch on web), `none`, or `full` (read+write+bash, disable this mode with `allowFullMode: false` in config)
+- **`mode`** — `read` (default; model-callable tools are limited to Read, Glob, Grep, WebFetch, and WebSearch), `none` (no model-callable tools), or `full` (Claude Code's normal tools except unsupported interactive/lifecycle tools; disable with `allowFullMode: false`)
 - **`model`** — `opus` (default), `sonnet`, `haiku`, or a full model ID
 - **`thinking`** — effort level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`
-- **`isolated`** — when `true`, Claude gets a clean session with no conversation history (default: `false`)
+- **`isolated`** — when `true`, Claude gets a fresh conversation with no Pi history or persisted Claude session (default: `true`). This is conversation isolation, not a hermetic process: working-directory access, settings, sandbox, and managed policy still apply.
 
 ## Configuration
 
@@ -60,13 +60,15 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
   "askClaude": {
     "enabled": true,
     "allowFullMode": true,
-    "defaultIsolated": false,
+    "defaultIsolated": true,
+    "permissionMode": "auto",
     "description": "Custom tool description override"
   },
   "provider": {
     "plan": "max",
     "longContextExtraUsage": false,
     "strictMcpConfig": true,
+    "permissionMode": "auto",
     "pathToClaudeCodeExecutable": "/home/you/.nix-profile/bin/claude"
   }
 }
@@ -78,16 +80,30 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 - `label` — override the TUI label (default `"Ask Claude Code"`)
 - `description` — override the tool description. Default when `allowFullMode: true`: *"Delegate to Claude Code for a second opinion or analysis (code review, architecture questions, debugging theories), or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. Prefer to handle straightforward tasks yourself."*
 - `defaultMode` — `"read"` (default), `"none"`, or `"full"`
-- `defaultIsolated` — start each call in a fresh session (default `false`)
+- `defaultIsolated` — start each call in a fresh conversation without Pi history or Claude session persistence (default `true`)
 - `allowFullMode` — allow `mode: "full"`; set `false` to lock it out
 - `appendSkills` — forward pi's skills block into the system prompt (default `true`)
+- `permissionMode` — Claude Code permission policy within the selected capability mode (default `"auto"`). Supported SDK values are `"auto"`, `"default"`, `"acceptEdits"`, `"dontAsk"`, `"plan"`, and `"bypassPermissions"`. Bypass is dangerous, must be explicit, and cannot override organization-managed policy.
 
 `provider`:
 - `plan` (default `"pro"`) — set to `"max"` if you have a Max (or Team Premium/Enterprise) Anthropic plan. This enables Opus with 1M context.
 - `longContextExtraUsage` — set to `true` to enable 1M context models even if they cost money through Extra Usage on your plan. It enables Sonnet 4.6 with 1M on every plan and Opus 4.6 with 1M on Pro. Not needed for Opus 4.7 or 4.8.
 - `strictMcpConfig` — block MCP servers from `~/.claude.json` / `.mcp.json` (default `true`). Cloud MCP (Gmail/Drive via claude.ai OAuth) is always blocked.
 - `autoMemoryEnabled` — enable Claude Code's auto-memory system (default `false`)
+- `permissionMode` — Claude Code permission policy for provider queries and isolated summaries (default `"auto"`). The bridge does not install a host callback that overrides denials; Claude settings and managed policy may therefore reject Pi MCP calls.
 - `pathToClaudeCodeExecutable` — path to the `claude` binary. Useful if your OS/filesystem has the SDK's bundled musl/glibc binaries in a place where they can't run. For example, with Nix you can set the binary to e.g. `"/home/you/.nix-profile/bin/claude"`.
+
+Capability and permission are independent: `mode` controls which tools exist,
+while `permissionMode` controls how Claude Code governs calls to those tools.
+Claude Code may replace the requested permission mode because of user, project,
+or managed settings. AskClaude renders the requested and runtime modes when they
+differ and reports observable permission denials; the provider emits the same
+override as a warning. The bridge also summarizes non-sensitive constraints that
+the Agent SDK attributes to its managed settings tier (for example, required
+sandboxing or disabled bypass) without exposing permission-rule contents. The
+resolver does not execute an administrator `policyHelper`, and the SDK does not
+expose a complete effective sandbox decision, so the bridge does not claim that
+this summary is exhaustive.
 
 
 **Startup notice:** the first interactive session to reach Claude Code lists whichever of `provider.plan` and `askClaude.enabled` you have left unset, then records `startupNoticeShown` (the date, `YYYY-MM-DD`) in the global config so it doesn't nag again.

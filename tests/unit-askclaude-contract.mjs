@@ -10,12 +10,12 @@ describe("AskClaude model-facing contract", () => {
 		const contract = buildAskClaudeContract();
 
 		assert.equal(contract.defaultMode, "read");
-		assert.equal(contract.defaultIsolated, false);
+		assert.equal(contract.defaultIsolated, true);
 		assert.match(contract.toolDescription, /Defaults to read-only mode/);
-		assert.match(contract.promptDescription, /By default Claude sees the full conversation history/);
+		assert.match(contract.promptDescription, /fresh session without Pi conversation history/);
 		assert.match(contract.modeDescription, /"read" \(default\)/);
 		assert.doesNotMatch(contract.modeDescription, /"full" \(default\)/);
-		assert.match(contract.isolatedDescription, /Defaults to false\./);
+		assert.match(contract.isolatedDescription, /Defaults to true\./);
 	});
 
 	it("describes configured full and isolated defaults", () => {
@@ -31,6 +31,14 @@ describe("AskClaude model-facing contract", () => {
 		assert.match(contract.modeDescription, /"full" \(default\)/);
 		assert.doesNotMatch(contract.modeDescription, /"read" \(default\)/);
 		assert.match(contract.isolatedDescription, /Defaults to true\./);
+	});
+
+	it("allows configuration to restore shared history as the default", () => {
+		const contract = buildAskClaudeContract({ defaultIsolated: false });
+
+		assert.equal(contract.defaultIsolated, false);
+		assert.match(contract.promptDescription, /full conversation history/);
+		assert.match(contract.isolatedDescription, /Defaults to false\./);
 	});
 
 	it("honors a custom top-level description", () => {
@@ -75,9 +83,9 @@ describe("AskClaude model-facing contract", () => {
 	it("uses the package isolation default for malformed JSON", () => {
 		const contract = buildAskClaudeContract({ defaultIsolated: "false" });
 
-		assert.equal(contract.defaultIsolated, false);
-		assert.match(contract.promptDescription, /full conversation history/);
-		assert.match(contract.isolatedDescription, /Defaults to false\./);
+		assert.equal(contract.defaultIsolated, true);
+		assert.match(contract.promptDescription, /fresh session without Pi conversation history/);
+		assert.match(contract.isolatedDescription, /Defaults to true\./);
 	});
 });
 
@@ -103,7 +111,7 @@ describe("AskClaude call tags", () => {
 		);
 	});
 
-	it("keeps omitted package defaults quiet", () => {
-		assert.deepEqual(askClaudeContextTags({}, buildAskClaudeContract()), []);
+	it("shows the safe isolated package default", () => {
+		assert.deepEqual(askClaudeContextTags({}, buildAskClaudeContract()), ["isolated"]);
 	});
 });

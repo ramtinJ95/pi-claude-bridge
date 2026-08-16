@@ -372,6 +372,15 @@ hard-coded `bypassPermissions` mode. Replacing that behavior with configurable
 - Show the effective requested mode and managed-policy constraints where
   observable.
 
+Live Phase 1 characterization on the current workstation shows that requesting
+`auto` is changed by Claude Code to runtime `default`. The Agent SDK settings
+resolver attributes the relevant constraints to a managed macOS plist: sandbox
+is required, unsandboxed commands and bypass mode are disabled, only managed
+permission rules may grant access, and managed network/read restrictions apply.
+As a result, provider MCP tools remain denied unless organization policy permits
+them. The bridge must report this state; it must not install a `canUseTool`
+callback or other host-side override merely to make the provider appear to work.
+
 ### Phase 2: normalized events and richer blocking UI
 
 - Extract pure query options, the delegation runner, and the normalized event

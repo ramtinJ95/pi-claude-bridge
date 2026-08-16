@@ -3,7 +3,7 @@ import type { Config } from "./config.js";
 export type AskClaudeMode = "full" | "read" | "none";
 
 export const DEFAULT_ASKCLAUDE_MODE: AskClaudeMode = "read";
-export const DEFAULT_ASKCLAUDE_ISOLATED = false;
+export const DEFAULT_ASKCLAUDE_ISOLATED = true;
 
 export interface AskClaudeContract {
 	allowFull: boolean;
@@ -64,7 +64,7 @@ function isAskClaudeMode(value: unknown): value is AskClaudeMode {
 function toolDescription(defaultMode: AskClaudeMode, allowFull: boolean): string {
 	const base = `Delegate to Claude Code for a second opinion or analysis (${ANALYSIS_USE_CASES})`;
 	if (defaultMode === "full") {
-		return `${base}, or to autonomously handle a task. Defaults to full mode, which allows writing and bash execution without feedback to pi — use read mode for analysis-only work. ${PREFER_DIRECT}`;
+		return `${base}, or to autonomously handle a task. Defaults to full mode, which makes writing and bash available without feedback to pi; Claude Code permission policy still applies. Use read mode for analysis-only work. ${PREFER_DIRECT}`;
 	}
 	if (defaultMode === "none") {
 		const available = allowFull
@@ -92,7 +92,7 @@ function modeDescription(defaultMode: AskClaudeMode, allowFull: boolean): string
 		`"none"${marker("none")}: general knowledge only (no file access).`,
 	];
 	if (allowFull) {
-		parts.push(`"full"${marker("full")}: allows writing and bash execution (careful: runs without feedback to pi).`);
+		parts.push(`"full"${marker("full")}: makes writing and bash available (careful: runs without feedback to pi); permission policy still applies.`);
 	}
 	return parts.join(" ");
 }
