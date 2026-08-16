@@ -335,7 +335,21 @@ by tests:
 
 ## Delivery phases
 
-### Phase 0: establish the fork baseline
+### Phase 0: establish the fork baseline — complete
+
+**Completed in [PR #2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2).**
+The fork now requires Pi 0.84.2 and Node.js 22.19, pins matching Pi development
+packages, runs its test harnesses against the repository-local Pi CLI, records
+the installed Pi/Agent SDK/bundled Claude Code versions, and has an offline
+extension-load/provider-registration smoke test. The provider lifecycle-hook
+adapter gap is explicitly documented and guarded by characterization tests; no
+payload or HTTP response data is fabricated.
+
+Phase 0 validation passed typecheck, package dry-run, the real Pi load smoke,
+and all 200 unit tests. The remaining tool-heavy live-test failures on the
+current workstation are the known managed-policy interaction with the existing
+hard-coded `bypassPermissions` mode. Replacing that behavior with configurable
+`auto` remains Phase 1 work rather than an incomplete Phase 0 baseline.
 
 - Run the existing unit suite and typecheck unchanged.
 - Raise the supported Pi baseline to 0.84.2 and pin matching development
