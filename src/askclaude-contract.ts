@@ -26,7 +26,11 @@ const PREFER_DIRECT = "Prefer to handle straightforward tasks yourself.";
  */
 export function buildAskClaudeContract(config: Config["askClaude"] = {}): AskClaudeContract {
 	const allowFull = config?.allowFullMode !== false;
-	const configuredMode = config?.defaultMode ?? DEFAULT_ASKCLAUDE_MODE;
+	// Config is parsed from JSON without runtime schema validation. Treat an
+	// unknown value as read rather than letting it miss every denylist preset.
+	const configuredMode = isAskClaudeMode(config?.defaultMode)
+		? config.defaultMode
+		: DEFAULT_ASKCLAUDE_MODE;
 	// allowFullMode is a lockout, including calls that omit `mode`. Previously a
 	// configured full default bypassed the schema's removal of the full enum value.
 	const defaultMode = !allowFull && configuredMode === "full"
@@ -47,6 +51,10 @@ export function buildAskClaudeContract(config: Config["askClaude"] = {}): AskCla
 		modeDescription: modeDescription(defaultMode, allowFull),
 		isolatedDescription: isolatedDescription(defaultIsolated),
 	};
+}
+
+function isAskClaudeMode(value: unknown): value is AskClaudeMode {
+	return value === "full" || value === "read" || value === "none";
 }
 
 function toolDescription(defaultMode: AskClaudeMode, allowFull: boolean): string {

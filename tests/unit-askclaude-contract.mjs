@@ -51,6 +51,18 @@ describe("AskClaude model-facing contract", () => {
 		assert.doesNotMatch(contract.modeDescription, /"full"/);
 		assert.doesNotMatch(contract.toolDescription, /full mode/);
 	});
+
+	it("fails an invalid JSON defaultMode closed", () => {
+		const contract = buildAskClaudeContract({
+			allowFullMode: false,
+			defaultMode: "ful",
+		});
+
+		assert.equal(contract.defaultMode, "read");
+		assert.deepEqual(contract.modeValues, ["read", "none"]);
+		assert.match(contract.modeDescription, /"read" \(default\)/);
+		assert.doesNotMatch(contract.toolDescription, /full mode/);
+	});
 });
 
 describe("AskClaude call tags", () => {
