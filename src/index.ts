@@ -158,6 +158,7 @@ const ACTIVE_STREAM_SIMPLE_KEY = Symbol.for("claude-bridge:activeStreamSimple");
 // calling a hook with a made-up payload or response would be worse than an
 // honest compatibility limitation. See docs/PI-084-COMPATIBILITY.md.
 const PROVIDER_HOOK_SUPPORT = Object.freeze({
+	reviewedAgentSdk: "0.2.141",
 	onPayload: false,
 	onResponse: false,
 });

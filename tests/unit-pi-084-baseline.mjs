@@ -44,12 +44,14 @@ describe("Pi 0.84.2 baseline", () => {
 				cwd: scratch,
 				env: { ...process.env, PI_CODING_AGENT_DIR: join(scratch, "agent") },
 				encoding: "utf8",
+				timeout: 30_000,
 			});
 
 			assert.equal(
 				result.status,
 				0,
-				`Pi failed to load the extension\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+				`Pi failed to load the extension${result.error ? `: ${result.error.stack ?? result.error.message}` : ""}`
+					+ `\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
 			);
 			assert.match(result.stdout, /^claude-bridge\s+claude-/m);
 			assert.match(result.stdout, /claude-bridge\s+claude-haiku-4-5/);

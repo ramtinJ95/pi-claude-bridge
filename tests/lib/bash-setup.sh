@@ -16,14 +16,15 @@ if [[ -f "$__ENV_FILE" ]]; then
 fi
 
 # macOS does not ship GNU timeout. Prefer the native command when available,
-# then Homebrew's gtimeout, and finally Perl's exec-preserving alarm. The test
-# cleanup trap reaps descendants after a timeout.
+# then Homebrew's gtimeout, and finally the Node fallback, which kills the
+# command's whole process group on expiry.
 if ! command -v timeout >/dev/null 2>&1; then
 	if command -v gtimeout >/dev/null 2>&1; then
 		timeout() { gtimeout "$@"; }
 	else
+		__TIMEOUT_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/timeout.mjs"
 		timeout() {
-			perl -e '$seconds = shift @ARGV; alarm $seconds; exec @ARGV; die "exec failed: $!\n"' "$@"
+			node "$__TIMEOUT_HELPER" "$@"
 		}
 	fi
 fi

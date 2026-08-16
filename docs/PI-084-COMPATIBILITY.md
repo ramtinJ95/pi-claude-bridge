@@ -32,8 +32,11 @@ bridge deliberately does not invoke those callbacks with a synthetic query
 object, fake HTTP status, or invented headers: doing so would violate payload
 replacement semantics and make telemetry misleading.
 
-`tests/unit-provider-hook-contract.mjs` pins both sides of this adapter gap. If
-a future Agent SDK exposes request replacement, response observation, or fetch
-injection, that characterization test should fail so support can be reassessed.
-Until then, resolving the gap requires an upstream adapter API; it is not a
-truthful bridge-only shim.
+`tests/unit-provider-hook-contract.mjs` pins both sides of this adapter gap and
+asserts that the actual provider adapter does not invoke either callback. It
+also pins the exact Agent SDK version for which its declarations were manually
+reviewed. Any SDK upgrade must update that review gate after checking for
+request, response, fetch, transport, or differently named interception APIs;
+the absence of three familiar property names is not treated as proof. Until a
+supported adapter API exists, resolving the gap is not a truthful bridge-only
+shim.

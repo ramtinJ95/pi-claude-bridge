@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { __test } from "../src/index.ts";
+import { installedRuntimeVersions } from "./lib/runtime-versions.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -29,19 +30,48 @@ function typeProperties(path, typeName) {
 	return new Set(members.map((member) => member.name?.getText(file)).filter(Boolean));
 }
 
+function identifiersInFunction(path, functionName) {
+	const source = readFileSync(path, "utf8");
+	const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const declaration = file.statements.find(
+		(statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === functionName,
+	);
+	assert.ok(declaration, `${functionName} is missing from ${path}`);
+	const identifiers = new Set();
+	function visit(node) {
+		if (ts.isIdentifier(node) || ts.isStringLiteral(node)) identifiers.add(node.text);
+		ts.forEachChild(node, visit);
+	}
+	visit(declaration);
+	return identifiers;
+}
+
 describe("Pi provider lifecycle hook compatibility", () => {
 	it("characterizes the API gap without claiming fake support", () => {
 		const piTypes = join(ROOT, "node_modules/@earendil-works/pi-ai/dist/types.d.ts");
 		const sdkTypes = join(ROOT, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts");
+		const providerSource = join(ROOT, "src/index.ts");
 		const piOptions = typeProperties(piTypes, "ProviderRequestOptions");
 		const agentOptions = typeProperties(sdkTypes, "Options");
+		const providerIdentifiers = identifiersInFunction(providerSource, "streamClaudeAgentSdk");
 
 		assert.ok(piOptions.has("onPayload"));
 		assert.ok(piOptions.has("onResponse"));
 		assert.ok(!agentOptions.has("onPayload"), "Agent SDK now exposes onPayload; reassess bridge support");
 		assert.ok(!agentOptions.has("onResponse"), "Agent SDK now exposes onResponse; reassess bridge support");
 		assert.ok(!agentOptions.has("fetch"), "Agent SDK now exposes fetch injection; reassess response observation");
-		assert.deepEqual(__test.PROVIDER_HOOK_SUPPORT, { onPayload: false, onResponse: false });
+		assert.ok(!providerIdentifiers.has("onPayload"), "provider adapter now touches onPayload; verify replacement semantics");
+		assert.ok(!providerIdentifiers.has("onResponse"), "provider adapter now touches onResponse; verify response truthfulness");
+		assert.deepEqual(__test.PROVIDER_HOOK_SUPPORT, {
+			reviewedAgentSdk: "0.2.141",
+			onPayload: false,
+			onResponse: false,
+		});
+		assert.equal(
+			installedRuntimeVersions().agentSdk,
+			__test.PROVIDER_HOOK_SUPPORT.reviewedAgentSdk,
+			"Agent SDK changed; manually review all request/transport hooks before updating the compatibility claim",
+		);
 	});
 
 	it("pins Pi's custom streamSimple hook requirement", () => {
