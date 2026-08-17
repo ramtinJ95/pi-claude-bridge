@@ -209,7 +209,7 @@ for p in "${PROMPTS[@]}"; do
   TURN_B=$((TURN_B + 1))
   TURN_FILE="$LOGDIR/usage-test-direct-turn${TURN_B}.json"
 
-  CLAUDE_ARGS=(--model "$CC_MODEL" --output-format json -p "$p" --permission-mode bypassPermissions)
+  CLAUDE_ARGS=(--model "$CC_MODEL" --output-format json -p "$p" --permission-mode auto)
   if [ -n "$RESUME_ID" ]; then
     CLAUDE_ARGS+=(--resume "$RESUME_ID")
   fi

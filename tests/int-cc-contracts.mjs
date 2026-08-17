@@ -34,6 +34,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createSession, openSession, repairToolPairing } from "cc-session-io";
 import { formatRuntimeVersions } from "./lib/runtime-versions.mjs";
+import { ASKCLAUDE_READ_TOOLS } from "../src/query-policy.js";
 
 console.log(`Runtime: ${formatRuntimeVersions()}`);
 
@@ -46,11 +47,25 @@ const TOOL_USE_ID_META = "claudecode/toolUseId";
 
 /** Options every provider-path query shares, so a test only states its own subject. */
 function providerOptions(extra = {}) {
+	// These tests characterize MCP transport mechanics, not permission policy.
+	// Explicitly authorize only their fixture tools where workstation policy
+	// permits, so the calls can prove pairing and schema behavior.
+	// Production deliberately installs no canUseTool override.
+	const providerTools = new Set([
+		"mcp__custom-tools__alpha",
+		"mcp__custom-tools__beta",
+		"mcp__custom-tools__apply_edit",
+		"mcp__custom-tools__bash",
+	]);
 	return {
 		cwd: CWD,
 		model: MODEL,
 		tools: [],
-		permissionMode: "bypassPermissions",
+		permissionMode: "auto",
+		allowedTools: [...providerTools],
+		canUseTool: async (toolName, input, options) => providerTools.has(toolName)
+			? { behavior: "allow", updatedInput: input, toolUseID: options.toolUseID }
+			: { behavior: "deny", message: `Unexpected tool ${toolName}`, toolUseID: options.toolUseID },
 		env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" },
 		extraArgs: { "strict-mcp-config": null },
 		maxTurns: 6,
@@ -153,6 +168,17 @@ test("tools: [] exposes no builtin tools — only what we serve over MCP", { tim
 	const init = await initOnly(providerOptions({ mcpServers: toolServer([noArgTool("alpha")], []) }));
 	assert.deepEqual(init.tools, ["mcp__custom-tools__alpha"],
 		`CC exposed tools beyond our MCP server: ${JSON.stringify(init.tools)}`);
+});
+
+test("an explicit AskClaude read inventory exposes exactly the bounded tools", { timeout: 60_000 }, async () => {
+	const init = await initOnly(providerOptions({
+		tools: [...ASKCLAUDE_READ_TOOLS],
+		mcpServers: undefined,
+		maxTurns: 1,
+	}));
+	assert.deepEqual([...init.tools].sort(), [...ASKCLAUDE_READ_TOOLS].sort(),
+		`CC changed the explicit tool inventory: ${JSON.stringify(init.tools)}`);
+	assert.ok(!init.tools.includes("Agent"), "read mode unexpectedly exposes nested agents");
 });
 
 test("a tool_use naming an unserved tool is answered by CC, never dispatched to us", { timeout: 120_000 }, async () => {
@@ -353,7 +379,7 @@ test("--resume re-reads the JSONL from disk on every call", { timeout: 180_000 }
 		const answers = [];
 		for await (const message of query({
 			prompt: "What token did I ask you to remember? Reply with just the word.",
-			options: { resume: sessionId, model: MODEL, cwd: CWD, permissionMode: "bypassPermissions", tools: [], maxTurns: 2 },
+			options: { resume: sessionId, model: MODEL, cwd: CWD, permissionMode: "auto", tools: [], maxTurns: 2 },
 		})) {
 			if (message.type === "assistant") for (const block of message.message?.content ?? []) if (block.type === "text") answers.push(block.text);
 		}
@@ -383,7 +409,7 @@ test("arbitrary sanitized tool_use ids in an imported transcript resume fine", {
 	let answer = "";
 	for await (const message of query({
 		prompt: "What was the vault code from the file you read? One word.",
-		options: { resume: sessionId, model: MODEL, cwd: CWD, permissionMode: "bypassPermissions", tools: [], maxTurns: 2 },
+		options: { resume: sessionId, model: MODEL, cwd: CWD, permissionMode: "auto", tools: [], maxTurns: 2 },
 	})) {
 		if (message.type === "assistant") for (const block of message.message?.content ?? []) if (block.type === "text") answer += block.text;
 	}
@@ -441,21 +467,21 @@ test("ENABLE_CLAUDEAI_MCP_SERVERS=0 suppresses claude.ai cloud MCP servers", { t
 	delete withoutVar.ENABLE_CLAUDEAI_MCP_SERVERS;
 	const isCloud = (server) => server.name.startsWith("claude.ai ");
 
-	const before = await initOnly({ cwd: CWD, model: MODEL, tools: [], permissionMode: "bypassPermissions", env: withoutVar, maxTurns: 1 });
+	const before = await initOnly({ cwd: CWD, model: MODEL, tools: [], permissionMode: "auto", env: withoutVar, maxTurns: 1 });
 	const cloud = (before.mcp_servers ?? []).filter(isCloud);
 	if (cloud.length === 0) {
 		t.skip("no claude.ai cloud MCP servers configured for this account — nothing to suppress");
 		return;
 	}
 
-	const after = await initOnly({ cwd: CWD, model: MODEL, tools: [], permissionMode: "bypassPermissions", env: { ...withoutVar, ENABLE_CLAUDEAI_MCP_SERVERS: "0" }, maxTurns: 1 });
+	const after = await initOnly({ cwd: CWD, model: MODEL, tools: [], permissionMode: "auto", env: { ...withoutVar, ENABLE_CLAUDEAI_MCP_SERVERS: "0" }, maxTurns: 1 });
 	assert.deepEqual((after.mcp_servers ?? []).filter(isCloud), [],
 		`cloud MCP servers survived the env gate: ${JSON.stringify(after.mcp_servers)}`);
 });
 
 test("--strict-mcp-config suppresses filesystem MCP servers", { timeout: 120_000 }, async (t) => {
 	const env = { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" };
-	const base = { cwd: CWD, model: MODEL, tools: [], permissionMode: "bypassPermissions", env, maxTurns: 1 };
+	const base = { cwd: CWD, model: MODEL, tools: [], permissionMode: "auto", env, maxTurns: 1 };
 
 	const before = await initOnly(base);
 	if ((before.mcp_servers ?? []).length === 0) {

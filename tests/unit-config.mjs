@@ -59,18 +59,18 @@ describe("loadConfig", () => {
 			mkdirSync(globalDir, { recursive: true });
 			mkdirSync(projectDir, { recursive: true });
 			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "pro", strictMcpConfig: true },
-				askClaude: { enabled: true, defaultMode: "read" },
+				provider: { plan: "pro", strictMcpConfig: true, permissionMode: "default" },
+				askClaude: { enabled: true, defaultMode: "read", permissionMode: "dontAsk" },
 			}));
 			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "max", autoMemoryEnabled: true },
+				provider: { plan: "max", autoMemoryEnabled: true, permissionMode: "auto" },
 				askClaude: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
-				provider: { plan: "max", strictMcpConfig: true, autoMemoryEnabled: true },
-				askClaude: { enabled: false, defaultMode: "read" },
+				provider: { plan: "max", strictMcpConfig: true, autoMemoryEnabled: true, permissionMode: "auto" },
+				askClaude: { enabled: false, defaultMode: "read", permissionMode: "dontAsk" },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });

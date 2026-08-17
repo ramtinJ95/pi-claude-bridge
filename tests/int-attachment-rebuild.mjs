@@ -86,7 +86,7 @@ async function ask(sid) {
 	let out = "";
 	for await (const m of query({
 		prompt: ASK,
-		options: { resume: sid, model: MODEL, cwd: CWD, permissionMode: "bypassPermissions" },
+		options: { resume: sid, model: MODEL, cwd: CWD, permissionMode: "auto" },
 	})) {
 		if (m.type === "assistant") {
 			for (const block of m.message?.content ?? []) if (block.type === "text") out += block.text;

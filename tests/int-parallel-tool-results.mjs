@@ -72,7 +72,7 @@ test("CC resumes it and Claude can read all three results back", { timeout: 120_
 	let answer = "";
 	for await (const message of query({
 		prompt: "List the three tokens from the files you read earlier, uppercase, separated by spaces. Nothing else.",
-		options: { resume: sid, model: MODEL, cwd: CWD, permissionMode: "bypassPermissions" },
+		options: { resume: sid, model: MODEL, cwd: CWD, permissionMode: "auto" },
 	})) {
 		if (message.type === "assistant") {
 			for (const block of message.message?.content ?? []) if (block.type === "text") answer += block.text;

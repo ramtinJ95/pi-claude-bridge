@@ -2,7 +2,7 @@ import { calculateCost, StringEnum, type AssistantMessage, type AssistantMessage
 import * as piAi from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import { buildSessionContext, compact, generateBranchSummary, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { query, type EffortLevel, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
+import { query, resolveSettings, type EffortLevel, type PermissionMode, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
@@ -27,6 +27,16 @@ import { collectCarriedAttachments, placeCarriedAttachments, type CarriedAttachm
 import { createToolServer } from "./mcp-server.js";
 import { askClaudeContextTags, buildAskClaudeContract } from "./askclaude-contract.js";
 import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
+import {
+	observePermissionMode,
+	managedPolicyLabels,
+	DEFAULT_PERMISSION_MODE,
+	resolveDelegationPolicy,
+	resolveProviderPermissionPolicy,
+	summarizeManagedPolicy,
+	type ManagedPolicySummary,
+	type PermissionObservation,
+} from "./query-policy.js";
 
 // Compat (#2): use factory if available (pi-ai ≥0.66), else fall back to constructor (gsd-pi etc.)
 const _piAi = piAi as any;
@@ -173,6 +183,22 @@ const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
 const MODELS = buildModels(getModels("anthropic"));
 let providerSettings: NonNullable<Config["provider"]> = {};
 let longContextSettings: LongContextSettings = { plan: "pro", longContextExtraUsage: false };
+const managedPolicyCache = new Map<string, Promise<ManagedPolicySummary | undefined>>();
+const shownProviderPermissionOverrides = new Set<string>();
+
+function observedManagedPolicy(cwd: string): Promise<ManagedPolicySummary | undefined> {
+	let pending = managedPolicyCache.get(cwd);
+	if (!pending) {
+		pending = resolveSettings({ cwd, settingSources: [] })
+			.then(summarizeManagedPolicy)
+			.catch((error) => {
+				debug("managed policy: SDK settings resolution failed", error);
+				return undefined;
+			});
+		managedPolicyCache.set(cwd, pending);
+	}
+	return pending;
+}
 
 function resolveModel(input: string) {
 	return _resolveModel(MODELS, input);
@@ -190,32 +216,6 @@ function errorMessage(err: unknown): string {
 	}
 	return String(err);
 }
-
-// AskClaude mode presets — controls which CC tools are blocked per mode.
-// Only block tools that can't work (no pi TUI for user interaction).
-// Other CC tools (Agent, SendMessage, RemoteTrigger, Tasks, etc.) are intentionally not blocked.
-const ASKCLAUDE_ALWAYS_BLOCKED = [
-	"AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
-	"ToolSearch", // probes for blocked tools, wastes tokens
-	"ScheduleWakeup", // no harness to fire wakeup from inside a delegated subagent
-];
-const MODE_DISALLOWED_TOOLS: Record<string, string[]> = {
-	full: [
-		...ASKCLAUDE_ALWAYS_BLOCKED,
-	],
-	read: [
-		...ASKCLAUDE_ALWAYS_BLOCKED,
-		"Write", "Edit", "Bash", "NotebookEdit",
-		"EnterWorktree", "ExitWorktree", "CronCreate", "CronDelete", "TeamCreate", "TeamDelete",
-	],
-	none: [
-		...ASKCLAUDE_ALWAYS_BLOCKED,
-		"Read", "Write", "Edit", "Glob", "Grep", "Bash", "Agent",
-		"NotebookEdit", "EnterWorktree", "ExitWorktree",
-		"CronCreate", "CronDelete", "TeamCreate", "TeamDelete",
-		"WebFetch", "WebSearch",
-	],
-};
 
 // --- Session persistence ---
 
@@ -471,6 +471,7 @@ async function runIsolatedSummary(
 		const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
 		const compactProviderSettings = loadConfig(cwd).provider;
 		const claudeExecutable = compactProviderSettings?.pathToClaudeCodeExecutable;
+		const permissionPolicy = resolveProviderPermissionPolicy(compactProviderSettings);
 		const cliModel = claudeCodeModelId(model, longContextSettings);
 		debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} promptLen=${promptText.length}`);
 
@@ -479,6 +480,10 @@ async function runIsolatedSummary(
 			options: {
 				cwd,
 				env: { ...process.env, ...CC_CHILD_ENV },
+				permissionMode: permissionPolicy.permissionMode,
+				...(permissionPolicy.allowDangerouslySkipPermissions
+					? { allowDangerouslySkipPermissions: true }
+					: {}),
 				settings: { autoMemoryEnabled: false },
 				tools: [],
 				strictMcpConfig: true,
@@ -1252,6 +1257,8 @@ async function consumeQuery(
 	model: Model<any>,
 	wasAborted: () => boolean,
 	queryCtx: QueryContext,
+	requestedPermissionMode: PermissionMode = DEFAULT_PERMISSION_MODE,
+	managedPolicyPromise: Promise<ManagedPolicySummary | undefined> = Promise.resolve(undefined),
 ): Promise<{ capturedSessionId?: string }> {
 	let capturedSessionId: string | undefined;
 
@@ -1274,6 +1281,23 @@ async function consumeQuery(
 		if (message.type === "result") {
 			queryCtx.promptStream?.end();
 			logServedContextWindow("result", message, model);
+			const permissionDenials = (message as SDKMessage & {
+				permission_denials?: Array<{ tool_name: string; tool_use_id: string }>;
+			}).permission_denials ?? [];
+			if (permissionDenials.length) {
+				const deniedTools = permissionDenials
+					.slice(0, 3)
+					.map((denial) => denial.tool_name)
+					.join(", ");
+				debug("provider: permission denials", JSON.stringify(permissionDenials.map((denial) => ({
+					toolName: denial.tool_name,
+					toolUseId: denial.tool_use_id,
+				}))));
+				piUI?.notify(
+					`Claude Code denied provider tool${permissionDenials.length === 1 ? "" : "s"} ${deniedTools}. Allow the required MCP aliases in Claude permission settings or adjust provider.permissionMode; managed policy may require an administrator.`,
+					"warning",
+				);
+			}
 			resultError = resultErrorText(message);
 			if (resultError !== undefined) {
 				debug(`consumeQuery: error result, subtype=${message.subtype}, error=${resultError}`);
@@ -1293,6 +1317,27 @@ async function consumeQuery(
 				piUI?.notify(`Claude rate limit warning: ${Math.round(info.utilization ?? 0)}% used (${info.rateLimitType ?? ""})`, "warning");
 			}
 			continue;
+		}
+		if (message.type === "system" && message.subtype === "init") {
+			const observation = observePermissionMode(requestedPermissionMode, message.permissionMode);
+			if (observation) {
+				debug("provider: permission mode",
+					`requested=${observation.requested} effective=${observation.effective}`,
+					`overridden=${observation.overridden}`);
+				if (observation.overridden) {
+					const managedPolicy = await managedPolicyPromise;
+					const policyDetail = managedPolicyLabels(managedPolicy);
+					debug("provider: observed managed policy", policyDetail.join(",") || "not-observed");
+					const noticeKey = `${observation.requested}->${observation.effective}:${policyDetail.join("|")}`;
+					if (!shownProviderPermissionOverrides.has(noticeKey)) {
+						shownProviderPermissionOverrides.add(noticeKey);
+						piUI?.notify(
+							`Claude Code changed permission mode ${observation.requested} → ${observation.effective}${policyDetail.length ? `; managed policy: ${policyDetail.join(", ")}` : "; settings or managed policy may be responsible"}.`,
+							"warning",
+						);
+					}
+				}
+			}
 		}
 		if (!queryCtx.currentPiStream || !queryCtx.turnOutput) continue;
 
@@ -1600,11 +1645,16 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// threshold with CC's, including CC's anti-thrashing guard (issue #8).
 	// Manual /compact in CC still works (we never invoke it).
 	const childEnv = { ...process.env, ...CC_CHILD_ENV };
+	const permissionPolicy = resolveProviderPermissionPolicy(providerSettings);
+	const managedPolicyPromise = observedManagedPolicy(cwd);
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
 		env: childEnv,
 		tools: [],
-		permissionMode: "bypassPermissions",
+		permissionMode: permissionPolicy.permissionMode,
+		...(permissionPolicy.allowDangerouslySkipPermissions
+			? { allowDangerouslySkipPermissions: true }
+			: {}),
 		includePartialMessages: true,
 		settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },
 		systemPrompt: {
@@ -1621,7 +1671,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 
 	debug("provider: fresh query",
 		`model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
-		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"}`,
+		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"} permission=${permissionPolicy.requestedPermissionMode}`,
 		`ctxFiles=${promptCapture?.contextFiles.length ?? 0} strictMcp=${strictMcpConfigEnabled}`,
 		`prompt=${promptText.slice(0, 60)}${promptBlocks ? " [+images]" : ""}`);
 
@@ -1651,7 +1701,15 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	}
 
 	// Background consumer — runs until query ends
-	consumeQuery(sdkQuery, customToolNameToPi, model, () => wasAborted, queryCtx)
+	consumeQuery(
+		sdkQuery,
+		customToolNameToPi,
+		model,
+		() => wasAborted,
+		queryCtx,
+		permissionPolicy.requestedPermissionMode,
+		managedPolicyPromise,
+	)
 		.then(async ({ capturedSessionId }) => {
 			debug(`provider: consumeQuery completed, stopReason=${queryCtx.turnOutput?.stopReason}, error=${queryCtx.turnOutput?.errorMessage}, aborted=${wasAborted}`);
 
@@ -1742,6 +1800,14 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 
 // --- AskClaude: prompt and wait ---
 
+interface ObservedPermissionDenial {
+	toolName: string;
+	toolUseId: string;
+	reasonType?: string;
+	reason?: string;
+	message: string;
+}
+
 async function promptAndWait(
 	prompt: string,
 	mode: "full" | "read" | "none",
@@ -1755,8 +1821,15 @@ async function promptAndWait(
 		thinking?: string;
 		isolated?: boolean;
 		context?: Context["messages"];
+		permissionMode?: PermissionMode;
 	},
-): Promise<{ responseText: string; stopReason: string }> {
+): Promise<{
+	responseText: string;
+	stopReason: string;
+	permission?: PermissionObservation;
+	permissionDenials: ObservedPermissionDenial[];
+	managedPolicy?: ManagedPolicySummary;
+}> {
 	const cwd = process.cwd();
 	const requestedModel = options?.model ?? "opus";
 	const model = resolveModel(requestedModel);
@@ -1781,8 +1854,8 @@ async function promptAndWait(
 		}
 	}
 
-	// Mode → disallowed tools
-	const disallowedTools = MODE_DISALLOWED_TOOLS[mode] ?? [];
+	const delegationPolicy = resolveDelegationPolicy(mode, { permissionMode: options?.permissionMode });
+	const managedPolicyPromise = observedManagedPolicy(cwd);
 
 	// AskClaude uses Claude Code's native Read tool rather than Pi's MCP bridge.
 	// Same resolver as the provider path: a prompt neither recorded nor derivable
@@ -1791,7 +1864,9 @@ async function promptAndWait(
 	// Resolved only when the answer would be used. The throw is justified by what a
 	// miss would cost, so where it costs nothing — skills switched off, or no reader
 	// to open a skill file with — an unrelated miss must not fail the call.
-	const skillReadTool = disallowedTools.includes("Read") ? "none" : "native";
+	const skillReadTool = Array.isArray(delegationPolicy.tools) && delegationPolicy.tools.includes("Read")
+		? "native"
+		: delegationPolicy.capabilityMode === "full" ? "native" : "none";
 	const skillCapture = options?.appendSkills !== false && skillReadTool !== "none"
 		? promptCaptures.resolveOrDerive(options?.systemPrompt)
 		: undefined;
@@ -1813,7 +1888,7 @@ async function promptAndWait(
 
 	debug("askClaude:",
 		`mode=${mode} model=${modelId} cliModel=${cliModel} effort=${effort ?? "default"}`,
-		`isolated=${options?.isolated ?? false} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
+		`permission=${delegationPolicy.requestedPermissionMode} isolated=${options?.isolated ?? true} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
 		`skills=${Boolean(skillsBlock)} promptLen=${prompt.length}`);
 
 	// skills: [] suppresses Claude Code's own skill listing, a system-reminder naming every
@@ -1826,10 +1901,16 @@ async function promptAndWait(
 		options: {
 			cwd,
 			env: { ...process.env, ...CC_CHILD_ENV },
-			permissionMode: "bypassPermissions",
+			permissionMode: delegationPolicy.permissionMode,
+			...(delegationPolicy.allowDangerouslySkipPermissions
+				? { allowDangerouslySkipPermissions: true }
+				: {}),
 			settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },
 			skills: [],
-			...(disallowedTools.length ? { disallowedTools } : {}),
+			tools: delegationPolicy.tools,
+			...(delegationPolicy.disallowedTools
+				? { disallowedTools: delegationPolicy.disallowedTools }
+				: {}),
 			...(effort ? { effort } : {}),
 			// Preset unconditionally: omitting it leaves the child on the SDK's bare default,
 			// without the tool and permission guidance the bridge relies on everywhere else.
@@ -1857,6 +1938,14 @@ async function promptAndWait(
 	let sdkMessageCount = 0;
 	let textDeltaCount = 0;
 	let resultSubtype: string | undefined;
+	let permission: PermissionObservation | undefined;
+	let managedPolicy: ManagedPolicySummary | undefined;
+	const permissionDenials: ObservedPermissionDenial[] = [];
+	const recordPermissionDenial = (denial: ObservedPermissionDenial) => {
+		if (!permissionDenials.some((item) => item.toolUseId === denial.toolUseId)) {
+			permissionDenials.push(denial);
+		}
+	};
 
 	try {
 		for await (const message of sdkQuery) {
@@ -1898,6 +1987,13 @@ async function promptAndWait(
 				case "result": {
 					resultSubtype = message.subtype;
 					const r = message as any;
+					for (const denial of r.permission_denials ?? []) {
+						recordPermissionDenial({
+							toolName: denial.tool_name,
+							toolUseId: denial.tool_use_id,
+							message: "Denied by Claude Code permission policy",
+						});
+					}
 					if (r.usage) {
 						debug(`askClaude: result usage: in=${r.usage.input_tokens} out=${r.usage.output_tokens} cacheRead=${r.usage.cache_read_input_tokens ?? 0} cacheWrite=${r.usage.cache_creation_input_tokens ?? 0} turns=${r.num_turns ?? "?"}`);
 					}
@@ -1912,6 +2008,33 @@ async function promptAndWait(
 					}
 					break;
 				}
+				case "system": {
+					if (message.subtype === "init") {
+						managedPolicy ??= await managedPolicyPromise;
+						permission = observePermissionMode(
+							delegationPolicy.requestedPermissionMode,
+							message.permissionMode,
+						);
+						if (permission) {
+							debug("askClaude: permission mode",
+								`requested=${permission.requested} effective=${permission.effective}`,
+								`overridden=${permission.overridden}`,
+								`managed=${managedPolicyLabels(managedPolicy).join(",") || "not-observed"}`);
+						}
+					} else if (message.subtype === "permission_denied") {
+						recordPermissionDenial({
+							toolName: message.tool_name,
+							toolUseId: message.tool_use_id,
+							reasonType: message.decision_reason_type,
+							reason: message.decision_reason,
+							message: message.message,
+						});
+						debug("askClaude: permission denied",
+							`tool=${message.tool_name} reasonType=${message.decision_reason_type ?? "unknown"}`,
+							message.decision_reason ?? message.message);
+					}
+					break;
+				}
 			}
 		}
 
@@ -1920,7 +2043,7 @@ async function promptAndWait(
 			`stopReason=${stopReason} resultSubtype=${resultSubtype ?? "none"}`,
 			`sdkMessages=${sdkMessageCount} textDeltas=${textDeltaCount} responseLen=${responseText.length}`,
 			`toolCalls=${toolCalls.size}`);
-		return { responseText, stopReason };
+		return { responseText, stopReason, permission, permissionDenials, managedPolicy };
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 		sdkQuery.close();
@@ -1957,6 +2080,7 @@ export default function (pi: ExtensionAPI) {
 	const clearSession = (event: string) => {
 		debug(`${event}: clearing session ${sharedSession?.sessionId?.slice(0, 8) ?? "none"}`);
 		sharedSession = null;
+		shownProviderPermissionOverrides.clear();
 
 		// Clear the global streamSimple if this instance registered it.
 		// This allows /reload to work — the old instance clears the flag so
@@ -2105,6 +2229,7 @@ export default function (pi: ExtensionAPI) {
 	const askConf = config.askClaude;
 	const askContract = buildAskClaudeContract(askConf);
 	const { defaultMode, defaultIsolated, modeValues } = askContract;
+	const askPermissionMode = resolveDelegationPolicy(defaultMode, askConf).requestedPermissionMode;
 	askClaudeToolName = askConf?.name ?? "AskClaude";
 
 	if (askConf?.enabled) {
@@ -2123,6 +2248,7 @@ export default function (pi: ExtensionAPI) {
 			renderCall(args, theme) {
 				let text = theme.fg("mdLink", theme.bold("AskClaude "));
 				const tags = askClaudeContextTags(args, askContract);
+				tags.push(`permission=${askPermissionMode}`);
 				if (args.model) tags.push(`model=${args.model}`);
 				if (args.thinking) tags.push(`thinking=${args.thinking}`);
 				if (tags.length) text += `${theme.fg("accent", `[${tags.join(", ")}]`)} `;
@@ -2138,7 +2264,15 @@ export default function (pi: ExtensionAPI) {
 					return new Text(theme.fg("mdLink", "◉ Claude Code ") + theme.fg("muted", status), 0, 0);
 				}
 
-				const details = result.details as { prompt?: string; executionTime?: number; actions?: string; error?: boolean } | undefined;
+				const details = result.details as {
+					prompt?: string;
+					executionTime?: number;
+					actions?: string;
+					error?: boolean;
+					permission?: PermissionObservation;
+					permissionDenials?: ObservedPermissionDenial[];
+					managedPolicy?: ManagedPolicySummary;
+				} | undefined;
 				const body = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 				let text = details?.error
@@ -2147,8 +2281,22 @@ export default function (pi: ExtensionAPI) {
 
 				if (details?.executionTime) text += ` ${theme.fg("dim", `${(details.executionTime / 1000).toFixed(1)}s`)}`;
 				if (details?.actions) text += ` ${theme.fg("muted", details.actions)}`;
+				if (details?.permission) {
+					const permissionLabel = details.permission.overridden
+						? `${details.permission.requested}→${details.permission.effective}`
+						: details.permission.effective;
+					text += ` ${theme.fg(details.permission.overridden ? "warning" : "dim", `permission=${permissionLabel}`)}`;
+				} else {
+					text += ` ${theme.fg("dim", `requested=${askPermissionMode}`)}`;
+				}
+				if (details?.permissionDenials?.length) {
+					text += ` ${theme.fg("warning", `${details.permissionDenials.length} denied`)}`;
+				}
+				const policyLabels = managedPolicyLabels(details?.managedPolicy);
+				if (policyLabels.length) text += ` ${theme.fg("warning", "managed-policy")}`;
 
 				if (expanded) {
+					if (policyLabels.length) text += `\n${theme.fg("warning", `Managed policy: ${policyLabels.join(", ")}`)}`;
 					if (details?.prompt) text += `\n${theme.fg("dim", `Prompt: ${details.prompt}`)}`;
 					if (details?.prompt && body) text += `\n${theme.fg("dim", "─".repeat(40))}`;
 					if (body) text += `\n${theme.fg("toolOutput", body)}`;
@@ -2194,6 +2342,7 @@ export default function (pi: ExtensionAPI) {
 						model: params.model,
 						thinking: params.thinking,
 						isolated,
+						permissionMode: askConf?.permissionMode,
 						context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
 					});
 					clearInterval(progressInterval);
@@ -2201,12 +2350,30 @@ export default function (pi: ExtensionAPI) {
 					const executionTime = Date.now() - start;
 					const actions = buildActionSummary(toolCalls);
 
-					const text = actions
+					let text = actions
 						? `${result.responseText}\n\n[Claude Code actions: ${actions}]`
 						: result.responseText;
+					if (result.permission?.overridden) {
+						const policyLabels = managedPolicyLabels(result.managedPolicy);
+						text += `\n\n[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`;
+					}
+					if (result.permissionDenials.length) {
+						const denied = result.permissionDenials
+							.slice(0, 5)
+							.map((item) => `${item.toolName}${item.reasonType ? ` (${item.reasonType})` : ""}`)
+							.join(", ");
+						text += `\n\n[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`;
+					}
 					return {
 						content: [{ type: "text" as const, text }],
-						details: { prompt: params.prompt, executionTime, actions },
+						details: {
+							prompt: params.prompt,
+							executionTime,
+							actions,
+							permission: result.permission,
+							permissionDenials: result.permissionDenials,
+							managedPolicy: result.managedPolicy,
+						},
 					};
 				} catch (err) {
 					clearInterval(progressInterval);

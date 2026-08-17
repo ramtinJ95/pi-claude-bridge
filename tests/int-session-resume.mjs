@@ -168,7 +168,7 @@ try {
 
   console.log("Turn 7: AskClaude shared mode (should see non-provider context)...");
   const text7 = await promptAndWait(
-    'Use the AskClaude tool with prompt="What was the third word mentioned earlier? Reply with just the word."'
+    'Use the AskClaude tool with prompt="What was the third word mentioned earlier? Reply with just the word." and isolated=false'
   );
   console.log(`  AskClaude args: ${JSON.stringify(lastToolArgs)}`);
   console.log(`  AskClaude result: ${(lastToolResult || "").slice(0, 120)}`);
@@ -229,4 +229,3 @@ try {
     rmSync(TEST_CWD, { recursive: true, force: true });
   }
 }
-
