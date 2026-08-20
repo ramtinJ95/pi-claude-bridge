@@ -411,7 +411,7 @@ work: retry a transient managed-settings resolution failure instead of caching
 permission resolution; and clarify the compatibility reason for probing both
 managed read-path key locations. These are not prerequisites for Phase 2.
 
-### Phase 2: normalized events and richer blocking UI — next
+### Phase 2: normalized events and richer blocking UI — in progress
 
 - Extract pure query options, the delegation runner, and the normalized event
   model without routing the provider through that runner.
@@ -420,6 +420,79 @@ managed read-path key locations. These are not prerequisites for Phase 2.
 - Use Pi 0.84's themed Markdown and stateful tool-row rendering rather than a
   parallel rendering framework.
 - Keep final model-facing output bounded.
+
+Deliver Phase 2 as two independently reviewable PRs:
+
+1. **Delegation engine and normalized events — complete in
+   [PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4).** Extract delegation query
+   options and one Claude-native runner, normalize the SDK stream into a stable
+   snapshot, and replace `promptAndWait` while preserving the existing
+   `AskClaude` UI and model-facing behavior. Characterize fixture replay,
+   tool-result matching, usage, unknown events, cancellation, and cleanup. The
+   provider must remain outside this runner.
+2. **Rich `AskClaude` observability — next.** Stream those snapshots through Pi,
+   render compact and expanded live details with themed Markdown, surface tool
+   inputs/results/durations, emitted thinking summaries, usage, permission and
+   session metadata, and apply bounded retention, visible truncation,
+   credential redaction, and a bounded model-facing result.
+
+For the second PR, prefer a small retained record: approximately 16k characters
+for the model-facing answer, 2k per tool input or output, 32k/100 events for the
+retained timeline, and 4k for emitted thinking summaries. Keep these as named,
+independently tested constants rather than persistence-format promises.
+
+PR #4's implementation and validation are complete: typecheck, package dry-run,
+and all 243 unit tests pass. The live Agent SDK contract suite passed before the
+final review round (17 passed, one environment-dependent skip) and was not rerun
+because the final changes add no new undocumented SDK behavior assumption. A
+Fable/high AskClaude review found two blockers and four non-blocking items. The
+cancellation and resumed-session replay blockers were fixed, as were
+failed-snapshot fallback text, single policy resolution, and result-helper type
+narrowing.
+
+A final Opus review produced these accepted fixes:
+
+- **Cancellation is terminal and model-visible.** `runDelegation` still resolves
+  on cancellation so partial work survives, but the AskClaude glue now finalizes
+  that into a result that says it was cancelled, keeps the partial answer and
+  action summary, and carries `cancelled`/`error` details. Pi's
+  `AgentToolResult` has no `isError` field — only a throw sets it, and a throw
+  discards details — so a `tool_result` hook promotes those details to the real
+  `toolResult.isError`.
+- **A missing result is a failure.** The runner tracks whether an authoritative
+  SDK `result` arrived. An iterator that ends without one, and without an abort,
+  publishes a failed snapshot and throws instead of reporting success; an
+  assistant error seen earlier becomes the failure text.
+- **`SDKAssistantMessage.error` is preserved** as an `assistant_error` event and
+  snapshot field. It does not end the run on its own, since an authoritative
+  result may still follow.
+- **`parent_tool_use_id` is preserved** as `parentToolUseId` on normalized
+  tool events and tool records. The `tool_use` frame is authoritative for the
+  subagent relation; progress and result frames may only fill it in, never
+  flatten it. The UI stays flat for now.
+- **Diagnostics say `unhandled_sdk_message`, not `unknown`.** The SDK documents
+  many more frames than delegation consumes; a brittle ignore list was rejected
+  in favor of a name that only claims this reducer did not handle the frame.
+- **`isolated: true` with `resumeSessionId` is unrepresentable** through a
+  discriminated union, with the caller branching rather than casting.
+- Terminal lifecycle ownership stays in `runDelegation`: the reducer cannot infer
+  iterator completion, so a snapshot stays `running` until the runner finalizes
+  it.
+
+Enabling and documenting partial SDK messages is intentionally deferred to the
+rich-observability PR, where live streaming becomes user-visible and can be
+tested with its renderer. So are rich tool-row rendering, nested/subagent tree
+display, retention caps, visible truncation, and redaction.
+
+The Phase 2 handoff therefore starts from the merged delegation runner and event
+snapshot rather than reopening its provider/session boundaries. PR 2 should
+first enable and characterize `includePartialMessages`, then drive Pi partial
+updates and final rendering from the same snapshot. Two small runtime edges
+remain visible rather than silently declared solved: a signal already aborted
+before runner entry still takes the generic error path, and the Pi 0.84.2
+`tool_result` hook that promotes AskClaude cancellation/error details to
+`toolResult.isError` is source-verified and unit-tested through its pure decision
+function but has not yet had an end-to-end live AskClaude cancellation exercise.
 
 ### Phase 3: background job core
 

@@ -27,6 +27,13 @@ import { collectCarriedAttachments, placeCarriedAttachments, type CarriedAttachm
 import { createToolServer } from "./mcp-server.js";
 import { askClaudeContextTags, buildAskClaudeContract } from "./askclaude-contract.js";
 import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
+import { buildDelegationQueryOptions } from "./delegation-options.js";
+import { runDelegation, type DelegationRunResult } from "./delegation-runner.js";
+import {
+	sdkResultErrorText as resultErrorText,
+	type DelegationPermissionDenial,
+	type DelegationSnapshot,
+} from "./delegation-events.js";
 import {
 	observePermissionMode,
 	managedPolicyLabels,
@@ -435,17 +442,6 @@ function extractIsolatedSummaryPrompt(messages: Context["messages"]): string {
 	return promptText;
 }
 
-/** Failure text for an SDK result, or undefined when it succeeded. CC reports API failures
- *  (429 capacity, overload, prompt-too-long) with `is_error` on an otherwise success-shaped
- *  result; the dedicated error subtypes carry `errors` instead. */
-function resultErrorText(message: SDKMessage): string | undefined {
-	const result = message as SDKMessage & { subtype?: string; is_error?: boolean; result?: string; errors?: unknown; error?: unknown };
-	if (result.subtype === "success") return result.is_error ? result.result || "Claude Code reported an error" : undefined;
-	if (Array.isArray(result.errors) && result.errors.length) return result.errors.map(String).join("\n");
-	if (typeof result.error === "string") return result.error;
-	return `Claude Code failed: ${result.subtype ?? "unknown result"}`;
-}
-
 function isolatedStreamFn(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
 	const stream = newAssistantMessageEventStream();
 	void runIsolatedSummary(model, context, options, stream);
@@ -766,6 +762,8 @@ export const __test = {
 	buildMcpServers,
 	branchSummaryOutcome,
 	PROVIDER_HOOK_SUPPORT,
+	finalizeAskClaudeResult,
+	askClaudeResultIsError,
 };
 
 // --- Provider helpers: tool name mapping ---
@@ -777,6 +775,100 @@ function mapToolName(name: string): string {
 	if (builtin) return builtin;
 	if (normalized.startsWith(MCP_TOOL_PREFIX)) return name.slice(MCP_TOOL_PREFIX.length);
 	return name;
+}
+
+function updateAskClaudeToolCalls(
+	target: Map<string, ToolCallState>,
+	snapshot: DelegationSnapshot,
+): void {
+	target.clear();
+	for (const tool of snapshot.tools) {
+		target.set(tool.id, {
+			name: mapToolName(tool.name),
+			status: tool.status,
+			rawInput: tool.input,
+		});
+	}
+}
+
+interface AskClaudeResultDetails {
+	prompt?: string;
+	executionTime?: number;
+	actions?: string;
+	error?: boolean;
+	cancelled?: boolean;
+	permission?: PermissionObservation;
+	permissionDenials?: DelegationPermissionDenial[];
+	managedPolicy?: ManagedPolicySummary;
+}
+
+/**
+ * Promote AskClaude's own failure flag to pi's `toolResult.isError`.
+ *
+ * pi's AgentToolResult carries no isError field: a tool can only mark failure by
+ * throwing, and a throw replaces the result with a bare message, discarding the
+ * details the renderer needs and the partial answer a cancelled run collected.
+ * AskClaude records failure in its details instead, and the `tool_result` hook
+ * feeds this decision back so the model sees an error result.
+ */
+function askClaudeResultIsError(
+	event: { toolName: string; isError: boolean; details?: unknown },
+): { isError: true } | undefined {
+	if (event.toolName !== askClaudeToolName || event.isError) return undefined;
+	return (event.details as AskClaudeResultDetails | undefined)?.error ? { isError: true } : undefined;
+}
+
+/**
+ * Shape one finished delegation into the model-facing result and TUI details.
+ *
+ * A cancelled run resolves normally in the runner so partial work survives, so
+ * this is the only place that can stop it reading as a successful empty answer:
+ * the model is told it was cancelled, whatever response and actions did arrive
+ * are kept, and the `cancelled`/`error` details keep the renderer — and
+ * `askClaudeResultIsError` — from claiming success.
+ */
+function finalizeAskClaudeResult(input: {
+	result: DelegationRunResult;
+	prompt: string;
+	actions: string;
+	executionTime: number;
+}): { content: { type: "text"; text: string }[]; details: AskClaudeResultDetails } {
+	const { result, actions } = input;
+	const cancelled = result.stopReason === "cancelled";
+	const segments: string[] = [];
+
+	if (cancelled) {
+		segments.push(result.responseText
+			? `Cancelled by user. Partial response before cancellation:\n\n${result.responseText}`
+			: "Cancelled by user before Claude Code produced a response.");
+	} else if (result.responseText) {
+		segments.push(result.responseText);
+	}
+	if (actions) segments.push(`[Claude Code actions: ${actions}]`);
+	if (result.permission?.overridden) {
+		const policyLabels = managedPolicyLabels(result.managedPolicy);
+		segments.push(`[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`);
+	}
+	if (result.permissionDenials.length) {
+		const denied = result.permissionDenials
+			.slice(0, 5)
+			.map((item) => `${item.toolName}${item.reasonType ? ` (${item.reasonType})` : ""}`)
+			.join(", ");
+		segments.push(`[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`);
+	}
+
+	return {
+		content: [{ type: "text" as const, text: segments.join("\n\n") }],
+		details: {
+			prompt: input.prompt,
+			executionTime: input.executionTime,
+			actions,
+			...(cancelled ? { cancelled: true, error: true } : {}),
+			permission: result.permission,
+			permissionDenials: result.permissionDenials,
+			managedPolicy: result.managedPolicy,
+		},
+	};
 }
 
 // Provider path: the query runs with `tools: []`, so the only tools CC can
@@ -1800,48 +1892,35 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 
 // --- AskClaude: prompt and wait ---
 
-interface ObservedPermissionDenial {
-	toolName: string;
-	toolUseId: string;
-	reasonType?: string;
-	reason?: string;
-	message: string;
-}
-
-async function promptAndWait(
+async function runAskClaudeDelegation(
 	prompt: string,
 	mode: "full" | "read" | "none",
-	toolCalls: Map<string, ToolCallState>,
 	signal?: AbortSignal,
 	options?: {
 		systemPrompt?: string;
 		appendSkills?: boolean;
-		onStreamUpdate?: (responseText: string) => void;
+		onSnapshot?: (snapshot: DelegationSnapshot) => void;
 		model?: string;
 		thinking?: string;
 		isolated?: boolean;
 		context?: Context["messages"];
 		permissionMode?: PermissionMode;
 	},
-): Promise<{
-	responseText: string;
-	stopReason: string;
-	permission?: PermissionObservation;
-	permissionDenials: ObservedPermissionDenial[];
-	managedPolicy?: ManagedPolicySummary;
-}> {
+): Promise<DelegationRunResult> {
 	const cwd = process.cwd();
 	const requestedModel = options?.model ?? "opus";
 	const model = resolveModel(requestedModel);
 	const modelId = model?.id ?? requestedModel;
 	const cliModel = model ? claudeCodeModelId(model, longContextSettings) : modelId;
 
+	const isolated = options?.isolated ?? true;
+
 	// Session resume for shared mode — reuse provider's session if it exists,
 	// otherwise create one from pi's context.
 	// Note: doesn't update sharedSession.cursor after completion, so the next
 	// provider call will see missed messages and trigger a Case 4 rebuild.
 	let resumeSessionId: string | null = null;
-	if (!options?.isolated && options?.context?.length) {
+	if (!isolated && options?.context?.length) {
 		if (sharedSession) {
 			// Provider already has a session — just resume from it
 			// Any missed messages from other providers were already handled by the provider's Case 4
@@ -1854,9 +1933,6 @@ async function promptAndWait(
 		}
 	}
 
-	const delegationPolicy = resolveDelegationPolicy(mode, { permissionMode: options?.permissionMode });
-	const managedPolicyPromise = observedManagedPolicy(cwd);
-
 	// AskClaude uses Claude Code's native Read tool rather than Pi's MCP bridge.
 	// Same resolver as the provider path: a prompt neither recorded nor derivable
 	// throws here too, rather than silently sending Claude Code no skills.
@@ -1864,6 +1940,7 @@ async function promptAndWait(
 	// Resolved only when the answer would be used. The throw is justified by what a
 	// miss would cost, so where it costs nothing — skills switched off, or no reader
 	// to open a skill file with — an unrelated miss must not fail the call.
+	const delegationPolicy = resolveDelegationPolicy(mode, { permissionMode: options?.permissionMode });
 	const skillReadTool = Array.isArray(delegationPolicy.tools) && delegationPolicy.tools.includes("Read")
 		? "native"
 		: delegationPolicy.capabilityMode === "full" ? "native" : "none";
@@ -1878,176 +1955,56 @@ async function promptAndWait(
 	const effort = options?.thinking && options.thinking !== "off"
 		? REASONING_TO_EFFORT[options.thinking] : undefined;
 
-	const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
-
-	const extraArgs: Record<string, string | null> = {
-		"strict-mcp-config": null,
-		model: cliModel,
+	const queryInputs = {
+		policy: delegationPolicy,
+		cwd,
+		env: { ...process.env, ...CC_CHILD_ENV },
+		settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },
+		cliModel,
+		effort,
+		systemPromptAppend: skillsBlock,
+		pathToClaudeCodeExecutable: providerSettings.pathToClaudeCodeExecutable,
+		debugOptions: makeCliDebugOptions("askclaude"),
 	};
-	if (effort) extraArgs["thinking-display"] = "summarized";
+	// Isolation and resume are mutually exclusive by type: an isolated call has no
+	// session to resume, so the branch is made here rather than defended for later.
+	const resolved = buildDelegationQueryOptions(isolated
+		? { ...queryInputs, isolated: true }
+		: { ...queryInputs, isolated: false, resumeSessionId });
 
 	debug("askClaude:",
 		`mode=${mode} model=${modelId} cliModel=${cliModel} effort=${effort ?? "default"}`,
-		`permission=${delegationPolicy.requestedPermissionMode} isolated=${options?.isolated ?? true} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
+		`permission=${resolved.policy.requestedPermissionMode} isolated=${isolated} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
 		`skills=${Boolean(skillsBlock)} promptLen=${prompt.length}`);
 
-	// skills: [] suppresses Claude Code's own skill listing, a system-reminder naming every
-	// skill under the ~/.claude estate. The provider path gets this for free — `tools: []`
-	// removes the Skill tool and the listing with it — but AskClaude runs on CC's native
-	// tools, so it has to be asked for. Pi-side skills still arrive via skillsBlock below,
-	// which is meant to be the only channel.
-	const sdkQuery = query({
+	const result = await runDelegation({
 		prompt,
-		options: {
-			cwd,
-			env: { ...process.env, ...CC_CHILD_ENV },
-			permissionMode: delegationPolicy.permissionMode,
-			...(delegationPolicy.allowDangerouslySkipPermissions
-				? { allowDangerouslySkipPermissions: true }
-				: {}),
-			settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },
-			skills: [],
-			tools: delegationPolicy.tools,
-			...(delegationPolicy.disallowedTools
-				? { disallowedTools: delegationPolicy.disallowedTools }
-				: {}),
-			...(effort ? { effort } : {}),
-			// Preset unconditionally: omitting it leaves the child on the SDK's bare default,
-			// without the tool and permission guidance the bridge relies on everywhere else.
-			// Whether pi has skills to append is unrelated to whether the child needs that.
-			systemPrompt: { type: "preset", preset: "claude_code", append: skillsBlock },
-			settingSources: ["user", "project"] as SettingSource[],
-			extraArgs,
-			...(resumeSessionId ? { resume: resumeSessionId } : {}),
-			...(options?.isolated ? { persistSession: false } : {}),
-			...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
-			...makeCliDebugOptions("askclaude"),
-		},
+		options: resolved.options,
+		requestedPermissionMode: resolved.policy.requestedPermissionMode,
+		signal,
+		managedPolicy: observedManagedPolicy(cwd),
+		onSnapshot: options?.onSnapshot,
 	});
-
-	// Abort handling
-	let wasAborted = false;
-	const onAbort = () => {
-		wasAborted = true;
-		sdkQuery.interrupt().catch(() => { try { sdkQuery.close(); } catch {} });
-	};
-	if (signal?.aborted) { onAbort(); throw new Error("Aborted"); }
-	signal?.addEventListener("abort", onAbort, { once: true });
-
-	let responseText = "";
-	let sdkMessageCount = 0;
-	let textDeltaCount = 0;
-	let resultSubtype: string | undefined;
-	let permission: PermissionObservation | undefined;
-	let managedPolicy: ManagedPolicySummary | undefined;
-	const permissionDenials: ObservedPermissionDenial[] = [];
-	const recordPermissionDenial = (denial: ObservedPermissionDenial) => {
-		if (!permissionDenials.some((item) => item.toolUseId === denial.toolUseId)) {
-			permissionDenials.push(denial);
-		}
-	};
-
-	try {
-		for await (const message of sdkQuery) {
-			if (wasAborted) break;
-			sdkMessageCount++;
-
-			switch (message.type) {
-				case "stream_event": {
-					const event = (message as SDKMessage & { event: any }).event;
-					// Text deltas → accumulate and stream
-					if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
-						responseText += event.delta.text;
-						textDeltaCount++;
-						options?.onStreamUpdate?.(responseText);
-					}
-					// Tool call start → track for action summary progress
-					if (event?.type === "content_block_start" && event.content_block?.type === "tool_use") {
-						debug(`askClaude: tool_use start: ${event.content_block.name}`);
-						toolCalls.set(event.content_block.id, {
-							name: mapToolName(event.content_block.name),
-							status: "running",
-						});
-					}
-					break;
-				}
-				case "assistant": {
-					// Update tool calls with full input for action summary
-					for (const block of (message as any).message?.content ?? []) {
-						if (block.type === "tool_use") {
-							toolCalls.set(block.id, {
-								name: mapToolName(block.name),
-								status: "complete",
-								rawInput: block.input,
-							});
-						}
-					}
-					break;
-				}
-				case "result": {
-					resultSubtype = message.subtype;
-					const r = message as any;
-					for (const denial of r.permission_denials ?? []) {
-						recordPermissionDenial({
-							toolName: denial.tool_name,
-							toolUseId: denial.tool_use_id,
-							message: "Denied by Claude Code permission policy",
-						});
-					}
-					if (r.usage) {
-						debug(`askClaude: result usage: in=${r.usage.input_tokens} out=${r.usage.output_tokens} cacheRead=${r.usage.cache_read_input_tokens ?? 0} cacheWrite=${r.usage.cache_creation_input_tokens ?? 0} turns=${r.num_turns ?? "?"}`);
-					}
-					// Claude Code reports an API failure with `is_error` on a result whose
-					// subtype is still "success", so without this the error text was returned
-					// as Claude's answer and pi's model read a 429 as content. Throwing hands
-					// it to the tool's own catch, which renders it as an error result.
-					const failure = wasAborted ? undefined : resultErrorText(message);
-					if (failure) throw new Error(failure);
-					if (!responseText && message.subtype === "success" && message.result) {
-						responseText = message.result;
-					}
-					break;
-				}
-				case "system": {
-					if (message.subtype === "init") {
-						managedPolicy ??= await managedPolicyPromise;
-						permission = observePermissionMode(
-							delegationPolicy.requestedPermissionMode,
-							message.permissionMode,
-						);
-						if (permission) {
-							debug("askClaude: permission mode",
-								`requested=${permission.requested} effective=${permission.effective}`,
-								`overridden=${permission.overridden}`,
-								`managed=${managedPolicyLabels(managedPolicy).join(",") || "not-observed"}`);
-						}
-					} else if (message.subtype === "permission_denied") {
-						recordPermissionDenial({
-							toolName: message.tool_name,
-							toolUseId: message.tool_use_id,
-							reasonType: message.decision_reason_type,
-							reason: message.decision_reason,
-							message: message.message,
-						});
-						debug("askClaude: permission denied",
-							`tool=${message.tool_name} reasonType=${message.decision_reason_type ?? "unknown"}`,
-							message.decision_reason ?? message.message);
-					}
-					break;
-				}
-			}
-		}
-
-		const stopReason = wasAborted ? "cancelled" : "stop";
-		debug(`askClaude: done`,
-			`stopReason=${stopReason} resultSubtype=${resultSubtype ?? "none"}`,
-			`sdkMessages=${sdkMessageCount} textDeltas=${textDeltaCount} responseLen=${responseText.length}`,
-			`toolCalls=${toolCalls.size}`);
-		return { responseText, stopReason, permission, permissionDenials, managedPolicy };
-	} finally {
-		signal?.removeEventListener("abort", onAbort);
-		sdkQuery.close();
+	if (result.permission) {
+		debug("askClaude: permission mode",
+			`requested=${result.permission.requested} effective=${result.permission.effective}`,
+			`overridden=${result.permission.overridden}`,
+			`managed=${managedPolicyLabels(result.managedPolicy).join(",") || "not-observed"}`);
 	}
+	for (const denial of result.permissionDenials) {
+		debug("askClaude: permission denied",
+			`tool=${denial.toolName} reasonType=${denial.reasonType ?? "unknown"}`,
+			denial.reason ?? denial.message);
+	}
+	if (result.snapshot.usage) {
+		const usage = result.snapshot.usage;
+		debug(`askClaude: result usage: in=${usage.inputTokens} out=${usage.outputTokens} cacheRead=${usage.cacheReadInputTokens} cacheWrite=${usage.cacheCreationInputTokens} turns=${usage.turns}`);
+	}
+	debug("askClaude: done",
+		`stopReason=${result.stopReason} resultSubtype=${result.snapshot.resultSubtype ?? "none"}`,
+		`sdkMessages=${result.messageCount} responseLen=${result.responseText.length}`,
+		`toolCalls=${result.snapshot.tools.length}`);
+	return result;
 }
 
 // --- Extension registration ---
@@ -2233,6 +2190,8 @@ export default function (pi: ExtensionAPI) {
 	askClaudeToolName = askConf?.name ?? "AskClaude";
 
 	if (askConf?.enabled) {
+		pi.on("tool_result", (event) => askClaudeResultIsError(event));
+
 		const askClaudeParams = Type.Object({
 			prompt: Type.String({ description: askContract.promptDescription }),
 			mode: Type.Optional(StringEnum(modeValues, { description: askContract.modeDescription })),
@@ -2264,20 +2223,14 @@ export default function (pi: ExtensionAPI) {
 					return new Text(theme.fg("mdLink", "◉ Claude Code ") + theme.fg("muted", status), 0, 0);
 				}
 
-				const details = result.details as {
-					prompt?: string;
-					executionTime?: number;
-					actions?: string;
-					error?: boolean;
-					permission?: PermissionObservation;
-					permissionDenials?: ObservedPermissionDenial[];
-					managedPolicy?: ManagedPolicySummary;
-				} | undefined;
+				const details = result.details as AskClaudeResultDetails | undefined;
 				const body = result.content[0]?.type === "text" ? result.content[0].text : "";
 
-				let text = details?.error
-					? theme.fg("error", "✗ Claude Code error")
-					: theme.fg("mdLink", "✓ Claude Code");
+				let text = details?.cancelled
+					? theme.fg("warning", "⊘ Claude Code cancelled")
+					: details?.error
+						? theme.fg("error", "✗ Claude Code error")
+						: theme.fg("mdLink", "✓ Claude Code");
 
 				if (details?.executionTime) text += ` ${theme.fg("dim", `${(details.executionTime / 1000).toFixed(1)}s`)}`;
 				if (details?.actions) text += ` ${theme.fg("muted", details.actions)}`;
@@ -2336,9 +2289,10 @@ export default function (pi: ExtensionAPI) {
 				}, 1000);
 
 				try {
-					const result = await promptAndWait(params.prompt, mode, toolCalls, signal, {
+					const result = await runAskClaudeDelegation(params.prompt, mode, signal, {
 						systemPrompt: ctx.getSystemPrompt(),
 						appendSkills: askConf?.appendSkills,
+						onSnapshot: (snapshot) => updateAskClaudeToolCalls(toolCalls, snapshot),
 						model: params.model,
 						thinking: params.thinking,
 						isolated,
@@ -2347,34 +2301,12 @@ export default function (pi: ExtensionAPI) {
 					});
 					clearInterval(progressInterval);
 					onUpdate?.({ content: [{ type: "text", text: "" }], details: {} });
-					const executionTime = Date.now() - start;
-					const actions = buildActionSummary(toolCalls);
-
-					let text = actions
-						? `${result.responseText}\n\n[Claude Code actions: ${actions}]`
-						: result.responseText;
-					if (result.permission?.overridden) {
-						const policyLabels = managedPolicyLabels(result.managedPolicy);
-						text += `\n\n[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`;
-					}
-					if (result.permissionDenials.length) {
-						const denied = result.permissionDenials
-							.slice(0, 5)
-							.map((item) => `${item.toolName}${item.reasonType ? ` (${item.reasonType})` : ""}`)
-							.join(", ");
-						text += `\n\n[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`;
-					}
-					return {
-						content: [{ type: "text" as const, text }],
-						details: {
-							prompt: params.prompt,
-							executionTime,
-							actions,
-							permission: result.permission,
-							permissionDenials: result.permissionDenials,
-							managedPolicy: result.managedPolicy,
-						},
-					};
+					return finalizeAskClaudeResult({
+						result,
+						prompt: params.prompt,
+						actions: buildActionSummary(toolCalls),
+						executionTime: Date.now() - start,
+					});
 				} catch (err) {
 					clearInterval(progressInterval);
 					debug(`askClaude error: mode=${mode}, model=${params.model ?? "default"}, isolated=${isolated}, elapsed=${((Date.now() - start) / 1000).toFixed(1)}s, error=`, err);

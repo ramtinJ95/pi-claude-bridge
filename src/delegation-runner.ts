@@ -1,0 +1,177 @@
+import {
+	query,
+	type Options,
+	type PermissionMode,
+	type Query,
+	type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import {
+	createDelegationSnapshot,
+	missingResultErrorText,
+	reduceDelegationMessage,
+	sdkResultErrorText,
+	type DelegationPermissionDenial,
+	type DelegationSnapshot,
+} from "./delegation-events.js";
+import {
+	observePermissionMode,
+	type ManagedPolicySummary,
+	type PermissionObservation,
+} from "./query-policy.js";
+
+export interface DelegationQuery extends AsyncIterable<SDKMessage> {
+	interrupt(): Promise<void>;
+	close(): void;
+}
+
+export type DelegationQueryFactory = (params: { prompt: string; options: Options }) => DelegationQuery;
+
+export interface DelegationRunnerInput {
+	prompt: string;
+	options: Options;
+	requestedPermissionMode: PermissionMode;
+	signal?: AbortSignal;
+	managedPolicy?: Promise<ManagedPolicySummary | undefined>;
+	onSnapshot?: (snapshot: DelegationSnapshot) => void;
+	queryFactory?: DelegationQueryFactory;
+	now?: () => number;
+}
+
+export interface DelegationRunResult {
+	responseText: string;
+	stopReason: "stop" | "cancelled";
+	permission?: PermissionObservation;
+	permissionDenials: DelegationPermissionDenial[];
+	managedPolicy?: ManagedPolicySummary;
+	snapshot: DelegationSnapshot;
+	messageCount: number;
+}
+
+const defaultQueryFactory: DelegationQueryFactory = (params) => query(params) as Query;
+
+/**
+ * Own one Claude-native Agent SDK query lifecycle.
+ *
+ * Provider QueryContext, MCP result routing, and Pi session synchronization do
+ * not belong here. Blocking AskClaude uses this now; background jobs can reuse
+ * the same lifecycle later.
+ */
+export async function runDelegation(input: DelegationRunnerInput): Promise<DelegationRunResult> {
+	const now = input.now ?? Date.now;
+	let snapshot = createDelegationSnapshot(now());
+	let permission: PermissionObservation | undefined;
+	let managedPolicy: ManagedPolicySummary | undefined;
+	let messageCount = 0;
+	let wasAborted = false;
+	let sawResult = false;
+	let sdkQuery: DelegationQuery | undefined;
+
+	const publish = () => input.onSnapshot?.(snapshot);
+	const onAbort = () => {
+		wasAborted = true;
+		// interrupt() asks Claude Code to stop cooperatively. If that request itself
+		// fails there is nothing left to negotiate with, so close the transport and
+		// let the loop below report cancellation.
+		void sdkQuery?.interrupt().catch(() => {
+			try { sdkQuery?.close(); } catch {}
+		});
+	};
+	const completedResult = (stopReason: "stop" | "cancelled"): DelegationRunResult => ({
+		responseText: snapshot.responseText,
+		stopReason,
+		permission,
+		permissionDenials: snapshot.permissionDenials,
+		managedPolicy,
+		snapshot,
+		messageCount,
+	});
+
+	if (input.signal?.aborted) throw new Error("Aborted");
+
+	try {
+		sdkQuery = (input.queryFactory ?? defaultQueryFactory)({
+			prompt: input.prompt,
+			options: input.options,
+		});
+		input.signal?.addEventListener("abort", onAbort, { once: true });
+		publish();
+
+		for await (const message of sdkQuery) {
+			if (wasAborted) break;
+			messageCount++;
+			snapshot = reduceDelegationMessage(snapshot, message, now());
+
+			if (message.type === "system" && message.subtype === "init") {
+				managedPolicy ??= await input.managedPolicy;
+				permission = observePermissionMode(
+					input.requestedPermissionMode,
+					message.permissionMode,
+				);
+			}
+
+			if (message.type === "result") sawResult = true;
+			// Claude Code reports API failures (capacity, overload, prompt-too-long)
+			// with `is_error` on an otherwise success-shaped result. Publish the
+			// terminal snapshot first, then throw so callers render an error result
+			// instead of returning the failure text as Claude's answer.
+			const failure = message.type === "result" ? sdkResultErrorText(message) : undefined;
+			if (failure) {
+				snapshot = { ...snapshot, status: "failed", error: failure, updatedAt: now() };
+				publish();
+				throw new Error(failure);
+			}
+			publish();
+		}
+
+		if (wasAborted) {
+			// Cancellation resolves rather than throws: the caller still owns the
+			// partial answer and tool activity collected before the interrupt.
+			snapshot = { ...snapshot, status: "cancelled", updatedAt: now() };
+			publish();
+			return completedResult("cancelled");
+		}
+
+		if (!sawResult) {
+			// No authoritative result and no abort: the stream ended early. Succeeding
+			// here would hand Pi whatever text happened to arrive first as a complete
+			// answer.
+			const failure = missingResultErrorText(snapshot.assistantError);
+			snapshot = { ...snapshot, status: "failed", error: failure, updatedAt: now() };
+			publish();
+			throw new Error(failure);
+		}
+
+		snapshot = { ...snapshot, status: "succeeded", updatedAt: now() };
+		publish();
+		return completedResult("stop");
+	} catch (error) {
+		if (wasAborted) {
+			// An interrupt makes the SDK iterator throw ("aborted by user"). That is
+			// the cancellation path, not a delegation failure, so the error text is
+			// dropped and the state matches a clean break out of the loop.
+			snapshot = {
+				...snapshot,
+				status: "cancelled",
+				error: undefined,
+				updatedAt: now(),
+			};
+			publish();
+			return completedResult("cancelled");
+		}
+		// A result-shaped or missing-result failure already published its terminal
+		// snapshot above; only an unexpected throw still needs one.
+		if (snapshot.status === "running") {
+			snapshot = {
+				...snapshot,
+				status: "failed",
+				error: error instanceof Error ? error.message : String(error),
+				updatedAt: now(),
+			};
+			publish();
+		}
+		throw error;
+	} finally {
+		input.signal?.removeEventListener("abort", onAbort);
+		try { sdkQuery?.close(); } catch {}
+	}
+}
