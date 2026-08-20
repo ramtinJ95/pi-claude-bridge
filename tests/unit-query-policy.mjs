@@ -141,8 +141,10 @@ describe("Claude query permission policy", () => {
 			"provider does not apply resolved permission policy");
 		assert.match(delegation, /buildDelegationQueryOptions\(/,
 			"delegation does not use the pure options boundary");
-		assert.match(delegationOptions, /resolveDelegationPolicy\(input\.mode,/,
-			"delegation options do not resolve capability and permission policy");
+		assert.match(delegation, /resolveDelegationPolicy\(mode,/,
+			"delegation does not resolve capability and permission policy");
+		assert.match(delegationOptions, /const policy = input\.policy/,
+			"delegation options do not consume the already-resolved policy");
 		assert.match(delegationOptions, /permissionMode:\s*policy\.permissionMode/,
 			"delegation options do not apply resolved permission policy");
 		assert.doesNotMatch(provider, /runDelegation\(/,

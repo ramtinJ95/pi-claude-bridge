@@ -1,16 +1,18 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildDelegationQueryOptions } from "../src/delegation-options.js";
+import { resolveDelegationPolicy } from "../src/query-policy.js";
 
 function build(overrides = {}) {
+	const { mode = "read", permissionMode, ...inputs } = overrides;
 	return buildDelegationQueryOptions({
-		mode: "read",
+		policy: resolveDelegationPolicy(mode, { permissionMode }),
 		cwd: "/tmp/project",
 		env: { PATH: "/bin" },
 		settings: { autoMemoryEnabled: false },
 		cliModel: "claude-opus-test",
 		isolated: true,
-		...overrides,
+		...inputs,
 	});
 }
 

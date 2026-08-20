@@ -75,6 +75,38 @@ describe("normalized delegation events", () => {
 		assert.equal(snapshot.tools[0].status, "denied");
 	});
 
+	it("ignores tool results replayed from a resumed session", () => {
+		const replay = {
+			type: "user",
+			isReplay: true,
+			message: {
+				role: "user",
+				content: [{ type: "tool_result", tool_use_id: "old-tool", content: "old output" }],
+			},
+		};
+
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), replay, 1);
+
+		assert.deepEqual(snapshot.tools, []);
+	});
+
+	it("does not treat a success-shaped error result as response text", () => {
+		const result = {
+			type: "result",
+			subtype: "success",
+			is_error: true,
+			result: "capacity exhausted",
+			stop_reason: null,
+			permission_denials: [],
+			usage: {},
+			modelUsage: {},
+		};
+
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), result, 1);
+
+		assert.equal(snapshot.responseText, "");
+	});
+
 	it("turns unrecognized SDK frames into visible diagnostics", () => {
 		const events = normalizeDelegationMessage({ type: "future_event" }, 7);
 		const snapshot = events.reduce((state, event) => reduceDelegationEvent(state, event), createDelegationSnapshot(0));

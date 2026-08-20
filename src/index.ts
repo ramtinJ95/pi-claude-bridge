@@ -1856,10 +1856,10 @@ async function runAskClaudeDelegation(
 	// Resolved only when the answer would be used. The throw is justified by what a
 	// miss would cost, so where it costs nothing — skills switched off, or no reader
 	// to open a skill file with — an unrelated miss must not fail the call.
-	const policyForSkills = resolveDelegationPolicy(mode, { permissionMode: options?.permissionMode });
-	const skillReadTool = Array.isArray(policyForSkills.tools) && policyForSkills.tools.includes("Read")
+	const delegationPolicy = resolveDelegationPolicy(mode, { permissionMode: options?.permissionMode });
+	const skillReadTool = Array.isArray(delegationPolicy.tools) && delegationPolicy.tools.includes("Read")
 		? "native"
-		: policyForSkills.capabilityMode === "full" ? "native" : "none";
+		: delegationPolicy.capabilityMode === "full" ? "native" : "none";
 	const skillCapture = options?.appendSkills !== false && skillReadTool !== "none"
 		? promptCaptures.resolveOrDerive(options?.systemPrompt)
 		: undefined;
@@ -1872,8 +1872,7 @@ async function runAskClaudeDelegation(
 		? REASONING_TO_EFFORT[options.thinking] : undefined;
 
 	const resolved = buildDelegationQueryOptions({
-		mode,
-		permissionMode: options?.permissionMode,
+		policy: delegationPolicy,
 		cwd,
 		env: { ...process.env, ...CC_CHILD_ENV },
 		settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },

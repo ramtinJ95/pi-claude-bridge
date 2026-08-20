@@ -3,6 +3,7 @@ import type {
 	PermissionMode,
 	SDKMessage,
 	SDKRateLimitInfo,
+	SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
 export type DelegationStatus = "running" | "succeeded" | "failed" | "cancelled";
@@ -171,6 +172,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 	}
 
 	if (message.type === "user") {
+		if ((message as { isReplay?: boolean }).isReplay) return [];
 		const events: DelegationEvent[] = [];
 		const content = Array.isArray(message.message?.content) ? message.message.content : [];
 		for (const block of content) {
@@ -217,7 +219,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 			at,
 			subtype: message.subtype,
 			stopReason: message.stop_reason,
-			fallbackText: message.subtype === "success" ? message.result : undefined,
+			fallbackText: message.subtype === "success" && !message.is_error ? message.result : undefined,
 		});
 		return events;
 	}
@@ -384,8 +386,8 @@ export function reduceDelegationMessage(
 }
 
 /** Failure text for an SDK result, or undefined when it succeeded. */
-export function sdkResultErrorText(message: SDKMessage): string | undefined {
-	const result = message as SDKMessage & { subtype?: string; is_error?: boolean; result?: string; errors?: unknown; error?: unknown };
+export function sdkResultErrorText(message: SDKResultMessage): string | undefined {
+	const result = message as SDKResultMessage & { error?: unknown };
 	if (result.subtype === "success") return result.is_error ? result.result || "Claude Code reported an error" : undefined;
 	if (Array.isArray(result.errors) && result.errors.length) return result.errors.map(String).join("\n");
 	if (typeof result.error === "string") return result.error;

@@ -102,4 +102,36 @@ describe("delegation runner", () => {
 		assert.equal(hooks.interrupts, 1);
 		assert.ok(hooks.closes >= 1);
 	});
+
+	it("resolves as cancelled when the SDK iterator throws after interrupt", async () => {
+		const controller = new AbortController();
+		const hooks = {};
+		const query = {
+			async *[Symbol.asyncIterator]() {
+				yield init;
+				await new Promise((resolve) => setImmediate(resolve));
+				if (hooks.interrupts) throw new Error("Claude Code process aborted by user");
+				yield success;
+			},
+			async interrupt() { hooks.interrupts = (hooks.interrupts ?? 0) + 1; },
+			close() { hooks.closes = (hooks.closes ?? 0) + 1; },
+		};
+
+		const result = await runDelegation({
+			prompt: "question",
+			options: {},
+			requestedPermissionMode: "auto",
+			signal: controller.signal,
+			queryFactory: () => query,
+			onSnapshot: (snapshot) => {
+				if (snapshot.sessionId) controller.abort();
+			},
+		});
+
+		assert.equal(result.stopReason, "cancelled");
+		assert.equal(result.snapshot.status, "cancelled");
+		assert.equal(result.snapshot.error, undefined);
+		assert.equal(hooks.interrupts, 1);
+		assert.ok(hooks.closes >= 1);
+	});
 });

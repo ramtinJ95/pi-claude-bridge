@@ -67,9 +67,19 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 	const publish = () => input.onSnapshot?.(snapshot);
 	const onAbort = () => {
 		wasAborted = true;
-		void sdkQuery?.interrupt().catch(() => {});
-		try { sdkQuery?.close(); } catch {}
+		void sdkQuery?.interrupt().catch(() => {
+			try { sdkQuery?.close(); } catch {}
+		});
 	};
+	const completedResult = (stopReason: "stop" | "cancelled"): DelegationRunResult => ({
+		responseText: snapshot.responseText,
+		stopReason,
+		permission,
+		permissionDenials: snapshot.permissionDenials,
+		managedPolicy,
+		snapshot,
+		messageCount,
+	});
 
 	if (input.signal?.aborted) throw new Error("Aborted");
 
@@ -110,16 +120,18 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 		}
 		publish();
 
-		return {
-			responseText: snapshot.responseText,
-			stopReason: wasAborted ? "cancelled" : "stop",
-			permission,
-			permissionDenials: snapshot.permissionDenials,
-			managedPolicy,
-			snapshot,
-			messageCount,
-		};
+		return completedResult(wasAborted ? "cancelled" : "stop");
 	} catch (error) {
+		if (wasAborted) {
+			snapshot = {
+				...snapshot,
+				status: "cancelled",
+				error: undefined,
+				updatedAt: now(),
+			};
+			publish();
+			return completedResult("cancelled");
+		}
 		if (snapshot.status === "running") {
 			snapshot = {
 				...snapshot,

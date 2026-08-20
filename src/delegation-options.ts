@@ -1,18 +1,12 @@
 import type {
 	EffortLevel,
 	Options,
-	PermissionMode,
 	SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
-import {
-	resolveDelegationPolicy,
-	type CapabilityMode,
-	type DelegationPolicy,
-} from "./query-policy.js";
+import type { DelegationPolicy } from "./query-policy.js";
 
 export interface DelegationQueryOptionsInput {
-	mode: CapabilityMode;
-	permissionMode?: PermissionMode;
+	policy: DelegationPolicy;
 	cwd: string;
 	env: Options["env"];
 	settings: NonNullable<Options["settings"]>;
@@ -40,9 +34,7 @@ export interface ResolvedDelegationQueryOptions {
 export function buildDelegationQueryOptions(
 	input: DelegationQueryOptionsInput,
 ): ResolvedDelegationQueryOptions {
-	const policy = resolveDelegationPolicy(input.mode, {
-		permissionMode: input.permissionMode,
-	});
+	const policy = input.policy;
 	const extraArgs: Record<string, string | null> = {
 		"strict-mcp-config": null,
 		model: input.cliModel,
