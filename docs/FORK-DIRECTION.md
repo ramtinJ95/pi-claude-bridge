@@ -430,11 +430,17 @@ Deliver Phase 2 as two independently reviewable PRs:
    `AskClaude` UI and model-facing behavior. Characterize fixture replay,
    tool-result matching, usage, unknown events, cancellation, and cleanup. The
    provider must remain outside this runner.
-2. **Rich `AskClaude` observability — next.** Stream those snapshots through Pi,
-   render compact and expanded live details with themed Markdown, surface tool
-   inputs/results/durations, emitted thinking summaries, usage, permission and
-   session metadata, and apply bounded retention, visible truncation,
-   credential redaction, and a bounded model-facing result.
+2. **Rich `AskClaude` observability — implemented on
+   `phase-2-askclaude-observability`, pending review and merge.** Delegation now
+   requests partial SDK messages and publishes throttled Pi partial updates from
+   the same retained snapshot used by the final result. The Pi 0.84 stateful tool
+   row has compact and expanded themed views for streaming response text,
+   emitted thinking summaries, nested tools, inputs/results/durations, timeline,
+   usage/cost, model/session/cwd, capability, isolation, permission denials,
+   retries, rate limits, and observed managed-policy state. Named limits bound
+   model output, prompt/thinking/tool fields, timeline, and retained lists;
+   truncation is visible and persisted display details receive best-effort
+   credential redaction.
 
 For the second PR, prefer a small retained record: approximately 16k characters
 for the model-facing answer, 2k per tool input or output, 32k/100 events for the
@@ -484,15 +490,89 @@ rich-observability PR, where live streaming becomes user-visible and can be
 tested with its renderer. So are rich tool-row rendering, nested/subagent tree
 display, retention caps, visible truncation, and redaction.
 
-The Phase 2 handoff therefore starts from the merged delegation runner and event
-snapshot rather than reopening its provider/session boundaries. PR 2 should
-first enable and characterize `includePartialMessages`, then drive Pi partial
-updates and final rendering from the same snapshot. Two small runtime edges
+The Phase 2 PR 2 implementation started from the merged delegation runner and
+event snapshot rather than reopening its provider/session boundaries. It first
+enabled and characterized `includePartialMessages`, then drove Pi partial updates
+and final rendering from the same snapshot. Two small runtime edges
 remain visible rather than silently declared solved: a signal already aborted
 before runner entry still takes the generic error path, and the Pi 0.84.2
 `tool_result` hook that promotes AskClaude cancellation/error details to
 `toolResult.isError` is source-verified and unit-tested through its pure decision
 function but has not yet had an end-to-end live AskClaude cancellation exercise.
+
+PR 2 follows that handoff without changing the provider, session, or permission
+boundaries. `includePartialMessages` is asserted at the pure options boundary;
+recorded SDK stream fixtures continue to characterize the partial text,
+thinking, and tool event shapes. Renderer tests initialize the Pi 0.84 theme and
+exercise compact, expanded, nested, Markdown, and stateful component reuse paths.
+Retention tests pin every named limit, assembled-stream redaction, visible
+truncation, list omission accounting, and the bounded/redacted model-facing
+result. A Fable/high correctness review found three blockers, all fixed: the
+authoritative SDK result is now retained separately from multi-turn streamed
+narration and wins for the final model/UI answer; terminal failure text is
+visible even when a failed snapshot exists; and capped fields now receive one
+accurate truncation marker rather than a second pass that replaced the true
+omission count.
+
+The review's non-blocking items were then dispositioned. These were accepted and
+implemented in the same PR:
+
+- **Policy annotations survive the cap.** The bounded model-facing result no
+  longer joins its segments and truncates the tail, which silently dropped a
+  permission override or denial exactly when the answer reached
+  `MODEL_RESULT_MAX_CHARS`. `assembleModelResult` spends one total budget in
+  explicit priority order — policy annotations, then the action summary, then
+  the answer — and the answer absorbs the shortfall because it is the only
+  segment whose loss is self-describing. It is budgeted from the runner's own
+  snapshot text plus its omission count, so a capped answer still carries one
+  accurate marker rather than a second marker stacked on the display copy. The
+  authoritative SDK result still wins over streamed narration. The action
+  summary has its own named cap (`ACTION_SUMMARY_MAX_CHARS`), annotations have
+  `POLICY_ANNOTATION_MAX_CHARS`, and a floor keeps the lower-priority segments
+  from starving the answer even if a caller hands over an unbounded one.
+- **One retained record per result.** The action summary is now derived inside
+  finalization from the retained snapshot instead of being passed in from the
+  raw one, and the error path summarizes the retained snapshot too, so the
+  model-facing summary, persisted details, and rendered tool list describe the
+  same bounded, redacted record on both the success and failure paths.
+- **One requested model.** AskClaude execute resolves `requestedModel` once from
+  `ASK_CLAUDE_DEFAULT_MODEL` and uses it for the delegation call and for all
+  partial, final, and error metadata, so the query and the model shown beside it
+  cannot disagree.
+- **No test-shaped production cast.** Finalization requires a real complete
+  `DelegationSnapshot`; the `as DelegationSnapshot` cast and the
+  `responseText` fallback that existed only to tolerate a `{}` fixture are gone,
+  and the unit fixtures build snapshots with `createDelegationSnapshot`.
+- **Boundary-split credential fragments are documented, not defended against.**
+  Redaction needs a whole credential in one string, and retention cuts strings
+  at boundaries chosen for length. A secret straddling one leaves an unmatched
+  fragment on the retained side. The caps are the real containment and
+  redaction is a courtesy pass over what remains; a streaming secret detector
+  carrying state across every field was rejected as more machinery than this
+  display path warrants.
+
+Three non-blocking items were deferred rather than implemented:
+
+- **A live subagent stream-event probe** would pin whether nested `Agent` calls
+  emit the `parent_tool_use_id` relation the renderer is prepared to indent.
+  The uncertainty is real and belongs in Phase 3, where nested background jobs
+  make it load-bearing and `tests/int-cc-contracts.mjs` can assert it against
+  the installed SDK.
+- **Expanded render performance** rebuilds every child component for each
+  expanded frame. Measure it against a large retained snapshot before
+  optimizing; a caching layer added on suspicion would be parallel rendering
+  machinery this phase deliberately avoided.
+- **The oversized-input compact label** stays as-is: a tool input over its field
+  cap renders as visibly truncated JSON rather than a structured summary, which
+  is honest about what was retained.
+
+Final validation on this branch: 265 unit tests, typecheck, `npm pack`
+dry-run, and `git diff --check` all pass. The live Agent SDK contract suite
+passed after the blocker fixes (17 passed, one environment-dependent skip) and
+was not rerun for the disposition changes, which add no new undocumented SDK
+behavior assumption. The remaining step for Phase 2 is merge of this branch;
+Phase 3 should start from its retained snapshot rather than inventing a second
+background-job event format.
 
 ### Phase 3: background job core
 

@@ -6,6 +6,16 @@ import type {
 	SDKRateLimitInfo,
 	SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+	MODEL_RESULT_MAX_CHARS,
+	THINKING_MAX_CHARS,
+	TIMELINE_MAX_CHARS,
+	TIMELINE_MAX_EVENTS,
+	TOOL_FIELD_MAX_CHARS,
+	appendRetainedText,
+	retainText,
+	retainToolValue,
+} from "./delegation-retention.js";
 
 export type DelegationStatus = "running" | "succeeded" | "failed" | "cancelled";
 export type DelegationToolStatus = "running" | "succeeded" | "failed" | "denied";
@@ -51,15 +61,32 @@ export interface DelegationDiagnostic {
 	at: number;
 }
 
+export interface DelegationTimelineEntry {
+	at: number;
+	kind: string;
+	label: string;
+	toolUseId?: string;
+	parentToolUseId?: string | null;
+}
+
 export interface DelegationSnapshot {
 	status: DelegationStatus;
 	startedAt: number;
 	updatedAt: number;
 	responseText: string;
+	responseOmittedChars: number;
+	resultText?: string;
+	resultOmittedChars?: number;
 	thinkingText: string;
+	thinkingOmittedChars: number;
 	tools: DelegationToolCall[];
+	toolsOmitted?: number;
+	timeline: DelegationTimelineEntry[];
+	timelineOmitted: number;
 	permissionDenials: DelegationPermissionDenial[];
+	permissionDenialsOmitted?: number;
 	diagnostics: DelegationDiagnostic[];
+	diagnosticsOmitted?: number;
 	sessionId?: string;
 	cwd?: string;
 	model?: string;
@@ -90,7 +117,7 @@ export type DelegationEvent =
 	| { type: "assistant_error"; at: number; error: SDKAssistantMessageError }
 	| { type: "permission_denial"; at: number; denial: DelegationPermissionDenial }
 	| { type: "usage"; at: number; usage: DelegationUsage }
-	| { type: "result"; at: number; subtype: string; stopReason: string | null; fallbackText?: string }
+	| { type: "result"; at: number; subtype: string; stopReason: string | null; resultText?: string }
 	| { type: "retry"; at: number; attempt: number; maxRetries: number; delayMs: number; status: number | null; error: string }
 	| { type: "rate_limit"; at: number; info: SDKRateLimitInfo }
 	| { type: "diagnostic"; at: number; kind: DelegationDiagnostic["kind"]; label: string };
@@ -101,8 +128,12 @@ export function createDelegationSnapshot(startedAt = Date.now()): DelegationSnap
 		startedAt,
 		updatedAt: startedAt,
 		responseText: "",
+		responseOmittedChars: 0,
 		thinkingText: "",
+		thinkingOmittedChars: 0,
 		tools: [],
+		timeline: [],
+		timelineOmitted: 0,
 		permissionDenials: [],
 		diagnostics: [],
 	};
@@ -227,7 +258,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 			at,
 			subtype: message.subtype,
 			stopReason: message.stop_reason,
-			fallbackText: message.subtype === "success" && !message.is_error ? message.result : undefined,
+			resultText: message.subtype === "success" && !message.is_error ? message.result : undefined,
 		});
 		return events;
 	}
@@ -302,6 +333,57 @@ function echoedParent(tool: DelegationToolCall, echoed: string | null): string |
 	return echoed ?? tool.parentToolUseId;
 }
 
+function timelineEntryForEvent(
+	event: DelegationEvent,
+	snapshot: DelegationSnapshot,
+): DelegationTimelineEntry | undefined {
+	switch (event.type) {
+		case "text_delta":
+		case "thinking_delta":
+		case "tool_progress":
+			return undefined;
+		case "session":
+			return { at: event.at, kind: "session", label: `${event.model} · permission=${event.permissionMode}` };
+		case "tool_start":
+			return { at: event.at, kind: "tool_start", label: event.name, toolUseId: event.id, parentToolUseId: event.parentToolUseId };
+		case "tool_input":
+			return snapshot.tools.some((tool) => tool.id === event.id)
+				? undefined
+				: { at: event.at, kind: "tool_start", label: event.name, toolUseId: event.id, parentToolUseId: event.parentToolUseId };
+		case "tool_result":
+			return { at: event.at, kind: event.isError ? "tool_failed" : "tool_succeeded", label: event.isError ? "failed" : "completed", toolUseId: event.id, parentToolUseId: event.parentToolUseId };
+		case "assistant_error":
+			return { at: event.at, kind: "assistant_error", label: String(event.error) };
+		case "permission_denial":
+			return { at: event.at, kind: "permission_denial", label: `${event.denial.toolName}: ${event.denial.message}`, toolUseId: event.denial.toolUseId };
+		case "usage":
+			return { at: event.at, kind: "usage", label: `${event.usage.turns} turns · ${event.usage.outputTokens} output tokens` };
+		case "result":
+			return { at: event.at, kind: "result", label: `${event.subtype}${event.stopReason ? ` · ${event.stopReason}` : ""}` };
+		case "retry":
+			return { at: event.at, kind: "retry", label: `${event.attempt}/${event.maxRetries}: ${event.error}` };
+		case "rate_limit":
+			return { at: event.at, kind: "rate_limit", label: `${event.info.status ?? "update"}` };
+		case "diagnostic":
+			return { at: event.at, kind: event.kind, label: event.label };
+	}
+}
+
+function appendTimeline(
+	snapshot: DelegationSnapshot,
+	entry: DelegationTimelineEntry | undefined,
+): Pick<DelegationSnapshot, "timeline" | "timelineOmitted"> {
+	if (!entry) return { timeline: snapshot.timeline, timelineOmitted: snapshot.timelineOmitted };
+	const nextEntry = { ...entry, label: retainText(entry.label, TOOL_FIELD_MAX_CHARS) };
+	let timeline = [...snapshot.timeline, nextEntry];
+	let omitted = snapshot.timelineOmitted;
+	while (timeline.length > TIMELINE_MAX_EVENTS || JSON.stringify(timeline).length > TIMELINE_MAX_CHARS) {
+		timeline = timeline.slice(1);
+		omitted++;
+	}
+	return { timeline, timelineOmitted: omitted };
+}
+
 /**
  * Apply one normalized event without mutating the prior snapshot.
  *
@@ -313,7 +395,11 @@ export function reduceDelegationEvent(
 	snapshot: DelegationSnapshot,
 	event: DelegationEvent,
 ): DelegationSnapshot {
-	const base = { ...snapshot, updatedAt: event.at };
+	const base = {
+		...snapshot,
+		...appendTimeline(snapshot, timelineEntryForEvent(event, snapshot)),
+		updatedAt: event.at,
+	};
 	switch (event.type) {
 		case "session":
 			return {
@@ -323,23 +409,27 @@ export function reduceDelegationEvent(
 				model: event.model,
 				runtimePermissionMode: event.permissionMode,
 			};
-		case "text_delta":
-			return { ...base, responseText: snapshot.responseText + event.text };
-		case "thinking_delta":
-			return { ...base, thinkingText: snapshot.thinkingText + event.text };
+		case "text_delta": {
+			const retained = appendRetainedText(snapshot.responseText, event.text, MODEL_RESULT_MAX_CHARS, snapshot.responseOmittedChars);
+			return { ...base, responseText: retained.text, responseOmittedChars: retained.omittedChars };
+		}
+		case "thinking_delta": {
+			const retained = appendRetainedText(snapshot.thinkingText, event.text, THINKING_MAX_CHARS, snapshot.thinkingOmittedChars);
+			return { ...base, thinkingText: retained.text, thinkingOmittedChars: retained.omittedChars };
+		}
 		case "tool_start":
 			return {
 				...base,
 				tools: upsertTool(snapshot.tools, event.id,
-					() => ({ id: event.id, name: event.name, status: "running", input: event.input, startedAt: event.at, updatedAt: event.at, parentToolUseId: event.parentToolUseId }),
-					(tool) => ({ ...tool, name: event.name, input: event.input ?? tool.input, updatedAt: event.at, parentToolUseId: event.parentToolUseId })),
+					() => ({ id: event.id, name: event.name, status: "running", input: retainToolValue(event.input), startedAt: event.at, updatedAt: event.at, parentToolUseId: event.parentToolUseId }),
+					(tool) => ({ ...tool, name: event.name, input: event.input === undefined ? tool.input : retainToolValue(event.input), updatedAt: event.at, parentToolUseId: event.parentToolUseId })),
 			};
 		case "tool_input":
 			return {
 				...base,
 				tools: upsertTool(snapshot.tools, event.id,
-					() => ({ id: event.id, name: event.name, status: "running", input: event.input, startedAt: event.at, updatedAt: event.at, parentToolUseId: event.parentToolUseId }),
-					(tool) => ({ ...tool, name: event.name, input: event.input, updatedAt: event.at, parentToolUseId: event.parentToolUseId })),
+					() => ({ id: event.id, name: event.name, status: "running", input: retainToolValue(event.input), startedAt: event.at, updatedAt: event.at, parentToolUseId: event.parentToolUseId }),
+					(tool) => ({ ...tool, name: event.name, input: retainToolValue(event.input), updatedAt: event.at, parentToolUseId: event.parentToolUseId })),
 			};
 		case "tool_progress":
 			return {
@@ -356,8 +446,8 @@ export function reduceDelegationEvent(
 						id: event.id,
 						name: "unknown",
 						status: event.isError ? "failed" : "succeeded",
-						output: event.output,
-						error: event.isError ? event.output : undefined,
+						output: retainText(event.output, TOOL_FIELD_MAX_CHARS),
+						error: event.isError ? retainText(event.output, TOOL_FIELD_MAX_CHARS) : undefined,
 						startedAt: event.at,
 						updatedAt: event.at,
 						completedAt: event.at,
@@ -367,8 +457,8 @@ export function reduceDelegationEvent(
 					(tool) => ({
 						...tool,
 						status: event.isError ? "failed" : "succeeded",
-						output: event.output,
-						error: event.isError ? event.output : undefined,
+						output: retainText(event.output, TOOL_FIELD_MAX_CHARS),
+						error: event.isError ? retainText(event.output, TOOL_FIELD_MAX_CHARS) : undefined,
 						updatedAt: event.at,
 						completedAt: event.at,
 						durationMs: Math.max(0, event.at - tool.startedAt),
@@ -379,29 +469,40 @@ export function reduceDelegationEvent(
 			const duplicate = snapshot.permissionDenials.some((item) => item.toolUseId === event.denial.toolUseId);
 			return {
 				...base,
-				permissionDenials: duplicate ? snapshot.permissionDenials : [...snapshot.permissionDenials, event.denial],
+				permissionDenials: duplicate ? snapshot.permissionDenials : [...snapshot.permissionDenials, {
+					...event.denial,
+					reason: event.denial.reason ? retainText(event.denial.reason, TOOL_FIELD_MAX_CHARS) : undefined,
+					message: retainText(event.denial.message, TOOL_FIELD_MAX_CHARS),
+				}],
 				tools: upsertTool(snapshot.tools, event.denial.toolUseId,
-					() => ({ id: event.denial.toolUseId, name: event.denial.toolName, status: "denied", error: event.denial.message, startedAt: event.at, updatedAt: event.at, completedAt: event.at, durationMs: 0, parentToolUseId: null }),
-					(tool) => ({ ...tool, status: "denied", error: event.denial.message, updatedAt: event.at, completedAt: event.at, durationMs: Math.max(0, event.at - tool.startedAt) })),
+					() => ({ id: event.denial.toolUseId, name: event.denial.toolName, status: "denied", error: retainText(event.denial.message, TOOL_FIELD_MAX_CHARS), startedAt: event.at, updatedAt: event.at, completedAt: event.at, durationMs: 0, parentToolUseId: null }),
+					(tool) => ({ ...tool, status: "denied", error: retainText(event.denial.message, TOOL_FIELD_MAX_CHARS), updatedAt: event.at, completedAt: event.at, durationMs: Math.max(0, event.at - tool.startedAt) })),
 			};
 		}
 		case "usage":
 			return { ...base, usage: event.usage };
 		case "assistant_error":
 			return { ...base, assistantError: event.error };
-		case "result":
+		case "result": {
+			const authoritative = event.resultText === undefined
+				? undefined
+				: appendRetainedText("", event.resultText, MODEL_RESULT_MAX_CHARS);
 			return {
 				...base,
 				resultSubtype: event.subtype,
 				stopReason: event.stopReason,
-				responseText: snapshot.responseText || event.fallbackText || "",
+				resultText: authoritative?.text,
+				resultOmittedChars: authoritative?.omittedChars,
+				responseText: snapshot.responseText || authoritative?.text || "",
+				responseOmittedChars: snapshot.responseText ? snapshot.responseOmittedChars : authoritative?.omittedChars ?? 0,
 			};
+		}
 		case "retry":
-			return { ...base, retry: { attempt: event.attempt, maxRetries: event.maxRetries, delayMs: event.delayMs, status: event.status, error: event.error } };
+			return { ...base, retry: { attempt: event.attempt, maxRetries: event.maxRetries, delayMs: event.delayMs, status: event.status, error: retainText(event.error, TOOL_FIELD_MAX_CHARS) } };
 		case "rate_limit":
 			return { ...base, rateLimit: event.info };
 		case "diagnostic":
-			return { ...base, diagnostics: [...snapshot.diagnostics, { kind: event.kind, label: event.label, at: event.at }] };
+			return { ...base, diagnostics: [...snapshot.diagnostics, { kind: event.kind, label: retainText(event.label, TOOL_FIELD_MAX_CHARS), at: event.at }] };
 	}
 }
 

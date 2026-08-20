@@ -25,6 +25,7 @@ describe("delegation query options", () => {
 		assert.equal(policy.requestedPermissionMode, "auto");
 		assert.deepEqual(options.tools, ["Read", "Glob", "Grep", "WebFetch", "WebSearch"]);
 		assert.equal(options.permissionMode, "auto");
+		assert.equal(options.includePartialMessages, true);
 		assert.equal(options.persistSession, false);
 		assert.deepEqual(options.skills, []);
 		assert.deepEqual(options.settingSources, ["user", "project"]);

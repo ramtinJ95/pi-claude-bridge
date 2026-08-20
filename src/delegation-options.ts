@@ -50,6 +50,10 @@ export function buildDelegationQueryOptions(
 		options: {
 			cwd: input.cwd,
 			env: input.env,
+			// Delegation observability is driven from the same SDK stream as the
+			// final result. Without partial messages, text/thinking and tool starts
+			// only become visible after a completed assistant turn.
+			includePartialMessages: true,
 			permissionMode: policy.permissionMode,
 			...(policy.allowDangerouslySkipPermissions
 				? { allowDangerouslySkipPermissions: true }
