@@ -507,10 +507,17 @@ thinking, and tool event shapes. Renderer tests initialize the Pi 0.84 theme and
 exercise compact, expanded, nested, Markdown, and stateful component reuse paths.
 Retention tests pin every named limit, assembled-stream redaction, visible
 truncation, list omission accounting, and the bounded/redacted model-facing
-result. All 255 unit tests, typecheck, package dry-run, and diff checks pass. The
-remaining step for Phase 2 is review and merge of this branch; Phase 3 should
-then start from its retained snapshot rather than inventing a second
-background-job event format.
+result. A Fable/high correctness review found three blockers, all fixed: the
+authoritative SDK result is now retained separately from multi-turn streamed
+narration and wins for the final model/UI answer; terminal failure text is
+visible even when a failed snapshot exists; and capped fields now receive one
+accurate truncation marker rather than a second pass that replaced the true
+omission count. All 259 unit tests, typecheck, package dry-run, and diff checks
+pass. The live Agent SDK contract suite also passes (17 passed, one
+environment-dependent skip). The remaining step for Phase 2 is disposition of
+the review's non-blocking tradeoffs and merge of this branch; Phase 3 should then
+start from its retained snapshot rather than inventing a second background-job
+event format.
 
 ### Phase 3: background job core
 
