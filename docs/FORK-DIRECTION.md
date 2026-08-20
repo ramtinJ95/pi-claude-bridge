@@ -430,11 +430,17 @@ Deliver Phase 2 as two independently reviewable PRs:
    `AskClaude` UI and model-facing behavior. Characterize fixture replay,
    tool-result matching, usage, unknown events, cancellation, and cleanup. The
    provider must remain outside this runner.
-2. **Rich `AskClaude` observability — next.** Stream those snapshots through Pi,
-   render compact and expanded live details with themed Markdown, surface tool
-   inputs/results/durations, emitted thinking summaries, usage, permission and
-   session metadata, and apply bounded retention, visible truncation,
-   credential redaction, and a bounded model-facing result.
+2. **Rich `AskClaude` observability — implemented on
+   `phase-2-askclaude-observability`, pending review and merge.** Delegation now
+   requests partial SDK messages and publishes throttled Pi partial updates from
+   the same retained snapshot used by the final result. The Pi 0.84 stateful tool
+   row has compact and expanded themed views for streaming response text,
+   emitted thinking summaries, nested tools, inputs/results/durations, timeline,
+   usage/cost, model/session/cwd, capability, isolation, permission denials,
+   retries, rate limits, and observed managed-policy state. Named limits bound
+   model output, prompt/thinking/tool fields, timeline, and retained lists;
+   truncation is visible and persisted display details receive best-effort
+   credential redaction.
 
 For the second PR, prefer a small retained record: approximately 16k characters
 for the model-facing answer, 2k per tool input or output, 32k/100 events for the
@@ -484,15 +490,27 @@ rich-observability PR, where live streaming becomes user-visible and can be
 tested with its renderer. So are rich tool-row rendering, nested/subagent tree
 display, retention caps, visible truncation, and redaction.
 
-The Phase 2 handoff therefore starts from the merged delegation runner and event
-snapshot rather than reopening its provider/session boundaries. PR 2 should
-first enable and characterize `includePartialMessages`, then drive Pi partial
-updates and final rendering from the same snapshot. Two small runtime edges
+The Phase 2 PR 2 implementation started from the merged delegation runner and
+event snapshot rather than reopening its provider/session boundaries. It first
+enabled and characterized `includePartialMessages`, then drove Pi partial updates
+and final rendering from the same snapshot. Two small runtime edges
 remain visible rather than silently declared solved: a signal already aborted
 before runner entry still takes the generic error path, and the Pi 0.84.2
 `tool_result` hook that promotes AskClaude cancellation/error details to
 `toolResult.isError` is source-verified and unit-tested through its pure decision
 function but has not yet had an end-to-end live AskClaude cancellation exercise.
+
+PR 2 follows that handoff without changing the provider, session, or permission
+boundaries. `includePartialMessages` is asserted at the pure options boundary;
+recorded SDK stream fixtures continue to characterize the partial text,
+thinking, and tool event shapes. Renderer tests initialize the Pi 0.84 theme and
+exercise compact, expanded, nested, Markdown, and stateful component reuse paths.
+Retention tests pin every named limit, assembled-stream redaction, visible
+truncation, list omission accounting, and the bounded/redacted model-facing
+result. All 255 unit tests, typecheck, package dry-run, and diff checks pass. The
+remaining step for Phase 2 is review and merge of this branch; Phase 3 should
+then start from its retained snapshot rather than inventing a second
+background-job event format.
 
 ### Phase 3: background job core
 
