@@ -14,7 +14,7 @@ import {
 	PROMPT_MAX_CHARS,
 	RETAINED_LIST_MAX_ITEMS,
 	THINKING_MAX_CHARS,
-	redactSensitiveText,
+	retainActionSummary,
 	retainText,
 	retainTextWithOmissions,
 } from "./delegation-retention.js";
@@ -166,12 +166,13 @@ export function buildActionSummary(calls: Map<string, ToolCallState>): string {
 	return parts.join("; ");
 }
 
+/** Build the action summary from an already-retained snapshot, then redact and bound it. */
 export function buildSnapshotActionSummary(snapshot: DelegationSnapshot): string {
 	const calls = new Map<string, ToolCallState>();
 	for (const tool of snapshot.tools) {
 		calls.set(tool.id, { name: tool.name, status: tool.status, rawInput: tool.input });
 	}
-	return redactSensitiveText(buildActionSummary(calls));
+	return retainActionSummary(buildActionSummary(calls));
 }
 
 export function buildAskClaudePartialUpdate(

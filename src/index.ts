@@ -34,7 +34,7 @@ import {
 	retainDelegationSnapshot,
 	type AskClaudeResultDetails,
 } from "./askclaude-ui.js";
-import { MODEL_RESULT_MAX_CHARS, retainText } from "./delegation-retention.js";
+import { assembleModelResult } from "./delegation-retention.js";
 import { buildDelegationQueryOptions } from "./delegation-options.js";
 import { runDelegation, type DelegationRunResult } from "./delegation-runner.js";
 import {
@@ -792,53 +792,65 @@ function askClaudeResultIsError(
  * the model is told it was cancelled, whatever response and actions did arrive
  * are kept, and the `cancelled`/`error` details keep the renderer — and
  * `askClaudeResultIsError` — from claiming success.
+ *
+ * The action summary is derived here from the retained snapshot rather than
+ * accepted from the caller, so the model-facing summary, the persisted details,
+ * and the rendered tool list all describe the same bounded record.
  */
 function finalizeAskClaudeResult(input: {
 	result: DelegationRunResult;
 	prompt: string;
-	actions: string;
 	executionTime: number;
 	capabilityMode?: "full" | "read" | "none";
 	requestedModel?: string;
 	thinking?: string;
 	isolated?: boolean;
 }): { content: { type: "text"; text: string }[]; details: AskClaudeResultDetails } {
-	const { result, actions } = input;
-	const snapshot = retainDelegationSnapshot({
-		...result.snapshot,
-		responseText: result.snapshot.responseText ?? result.responseText,
-	} as DelegationSnapshot);
-	const responseText = snapshot.resultText ?? snapshot.responseText;
-	const retainedActions = retainText(actions, MODEL_RESULT_MAX_CHARS);
+	const { result } = input;
+	const snapshot = retainDelegationSnapshot(result.snapshot);
+	const actions = buildSnapshotActionSummary(snapshot);
 	const cancelled = result.stopReason === "cancelled";
-	const segments: string[] = [];
 
-	if (cancelled) {
-		segments.push(responseText
-			? `Cancelled by user. Partial response before cancellation:\n\n${responseText}`
-			: "Cancelled by user before Claude Code produced a response.");
-	} else if (responseText) {
-		segments.push(responseText);
-	}
-	if (retainedActions) segments.push(`[Claude Code actions: ${retainedActions}]`);
+	// The authoritative SDK result still wins over earlier streamed narration.
+	// Budget the model answer from the runner's own snapshot text rather than the
+	// retained display copy, so an answer that hits the cap carries one accurate
+	// omission count instead of a second marker stacked on an already-marked one.
+	const resultText = result.snapshot.resultText;
+	const answer = resultText ?? result.snapshot.responseText;
+	const answerOmittedChars = (resultText === undefined ? result.snapshot.responseOmittedChars : result.snapshot.resultOmittedChars) ?? 0;
+
+	// Policy annotations, not prose: they tell the model the answer was produced
+	// under an overridden permission mode or with tools denied.
+	const annotations: string[] = [];
 	if (result.permission?.overridden) {
 		const policyLabels = managedPolicyLabels(result.managedPolicy);
-		segments.push(`[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`);
+		annotations.push(`[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`);
 	}
 	if (result.permissionDenials.length) {
 		const denied = result.permissionDenials
 			.slice(0, 5)
 			.map((item) => `${item.toolName}${item.reasonType ? ` (${item.reasonType})` : ""}`)
 			.join(", ");
-		segments.push(`[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`);
+		annotations.push(`[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`);
 	}
 
+	const text = assembleModelResult({
+		answer: cancelled
+			? answer
+				? `Cancelled by user. Partial response before cancellation:\n\n${answer}`
+				: "Cancelled by user before Claude Code produced a response."
+			: answer,
+		answerOmittedChars: answer ? answerOmittedChars : 0,
+		actions: actions ? `[Claude Code actions: ${actions}]` : "",
+		annotations,
+	});
+
 	return {
-		content: [{ type: "text" as const, text: retainText(segments.join("\n\n"), MODEL_RESULT_MAX_CHARS) }],
+		content: [{ type: "text" as const, text }],
 		details: {
 			prompt: retainAskClaudePrompt(input.prompt),
 			executionTime: input.executionTime,
-			actions: retainedActions,
+			actions,
 			capabilityMode: input.capabilityMode,
 			requestedModel: input.requestedModel,
 			thinking: input.thinking,
@@ -1873,6 +1885,10 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 
 // --- AskClaude: prompt and wait ---
 
+// One source for the delegation default so the query and the model/permission
+// metadata rendered beside it cannot disagree about which model was requested.
+const ASK_CLAUDE_DEFAULT_MODEL = "opus";
+
 async function runAskClaudeDelegation(
 	prompt: string,
 	mode: "full" | "read" | "none",
@@ -1889,7 +1905,7 @@ async function runAskClaudeDelegation(
 	},
 ): Promise<DelegationRunResult> {
 	const cwd = process.cwd();
-	const requestedModel = options?.model ?? "opus";
+	const requestedModel = options?.model ?? ASK_CLAUDE_DEFAULT_MODEL;
 	const model = resolveModel(requestedModel);
 	const modelId = model?.id ?? requestedModel;
 	const cliModel = model ? claudeCodeModelId(model, longContextSettings) : modelId;
@@ -2213,6 +2229,7 @@ export default function (pi: ExtensionAPI) {
 
 				const mode = (params.mode ?? defaultMode) as "full" | "read" | "none";
 				const isolated = params.isolated ?? defaultIsolated;
+				const requestedModel = params.model ?? ASK_CLAUDE_DEFAULT_MODEL;
 				const start = Date.now();
 				let lastSnapshot: DelegationSnapshot | undefined;
 				let lastPublishedAt = 0;
@@ -2236,7 +2253,7 @@ export default function (pi: ExtensionAPI) {
 						prompt: params.prompt,
 						executionTime: now - start,
 						capabilityMode: mode,
-						requestedModel: params.model ?? "opus",
+						requestedModel,
 						thinking: params.thinking,
 						isolated,
 					}));
@@ -2255,7 +2272,7 @@ export default function (pi: ExtensionAPI) {
 							lastSnapshot = snapshot;
 							publishSnapshot();
 						},
-						model: params.model,
+						model: requestedModel,
 						thinking: params.thinking,
 						isolated,
 						permissionMode: askConf?.permissionMode,
@@ -2265,26 +2282,26 @@ export default function (pi: ExtensionAPI) {
 					return finalizeAskClaudeResult({
 						result,
 						prompt: params.prompt,
-						actions: buildSnapshotActionSummary(result.snapshot),
 						executionTime: Date.now() - start,
 						capabilityMode: mode,
-						requestedModel: params.model ?? "opus",
+						requestedModel,
 						thinking: params.thinking,
 						isolated,
 					});
 				} catch (err) {
 					stopPublishing();
-					debug(`askClaude error: mode=${mode}, model=${params.model ?? "default"}, isolated=${isolated}, elapsed=${((Date.now() - start) / 1000).toFixed(1)}s, error=`, err);
-					const msg = retainText(errorMessage(err), MODEL_RESULT_MAX_CHARS);
+					debug(`askClaude error: mode=${mode}, model=${requestedModel}, isolated=${isolated}, elapsed=${((Date.now() - start) / 1000).toFixed(1)}s, error=`, err);
+					// Summarize the retained snapshot, not the raw one: the failure path
+					// persists and displays the same bounded, redacted record as success.
 					const retainedSnapshot = lastSnapshot ? retainDelegationSnapshot(lastSnapshot) : undefined;
 					return {
-						content: [{ type: "text" as const, text: `Error: ${msg}` }],
+						content: [{ type: "text" as const, text: assembleModelResult({ answer: `Error: ${errorMessage(err)}` }) }],
 						details: {
 							prompt: retainAskClaudePrompt(params.prompt),
 							executionTime: Date.now() - start,
-							actions: lastSnapshot ? buildSnapshotActionSummary(lastSnapshot) : undefined,
+							actions: retainedSnapshot ? buildSnapshotActionSummary(retainedSnapshot) : undefined,
 							capabilityMode: mode,
-							requestedModel: params.model ?? "opus",
+							requestedModel,
 							thinking: params.thinking,
 							isolated,
 							error: true,

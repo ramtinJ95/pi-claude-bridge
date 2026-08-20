@@ -1,14 +1,18 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+	ACTION_SUMMARY_MAX_CHARS,
 	MODEL_RESULT_MAX_CHARS,
+	POLICY_ANNOTATION_MAX_CHARS,
 	PROMPT_MAX_CHARS,
 	RETAINED_LIST_MAX_ITEMS,
 	THINKING_MAX_CHARS,
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_EVENTS,
 	TOOL_FIELD_MAX_CHARS,
+	assembleModelResult,
 	redactSensitiveText,
+	retainActionSummary,
 	retainText,
 	retainToolValue,
 } from "../src/delegation-retention.js";
@@ -18,9 +22,59 @@ import { retainDelegationSnapshot } from "../src/askclaude-ui.js";
 describe("delegation retention", () => {
 	it("pins each independently adjustable retention choice", () => {
 		assert.deepEqual(
-			{ MODEL_RESULT_MAX_CHARS, TOOL_FIELD_MAX_CHARS, TIMELINE_MAX_CHARS, TIMELINE_MAX_EVENTS, RETAINED_LIST_MAX_ITEMS, THINKING_MAX_CHARS, PROMPT_MAX_CHARS },
-			{ MODEL_RESULT_MAX_CHARS: 16_000, TOOL_FIELD_MAX_CHARS: 2_000, TIMELINE_MAX_CHARS: 32_000, TIMELINE_MAX_EVENTS: 100, RETAINED_LIST_MAX_ITEMS: 100, THINKING_MAX_CHARS: 4_000, PROMPT_MAX_CHARS: 8_000 },
+			{ MODEL_RESULT_MAX_CHARS, TOOL_FIELD_MAX_CHARS, TIMELINE_MAX_CHARS, TIMELINE_MAX_EVENTS, RETAINED_LIST_MAX_ITEMS, THINKING_MAX_CHARS, PROMPT_MAX_CHARS, ACTION_SUMMARY_MAX_CHARS, POLICY_ANNOTATION_MAX_CHARS },
+			{ MODEL_RESULT_MAX_CHARS: 16_000, TOOL_FIELD_MAX_CHARS: 2_000, TIMELINE_MAX_CHARS: 32_000, TIMELINE_MAX_EVENTS: 100, RETAINED_LIST_MAX_ITEMS: 100, THINKING_MAX_CHARS: 4_000, PROMPT_MAX_CHARS: 8_000, ACTION_SUMMARY_MAX_CHARS: 2_000, POLICY_ANNOTATION_MAX_CHARS: 1_000 },
 		);
+	});
+
+	it("redacts and bounds one action summary", () => {
+		const redacted = retainActionSummary("Bash(export api_key=super-secret)");
+		assert.doesNotMatch(redacted, /super-secret/);
+		assert.match(redacted, /Bash\(export api_key=\[REDACTED\]/);
+
+		const oversized = retainActionSummary(Array.from({ length: 400 }, (_, i) => `Read(file-${i}.ts)`).join("; "));
+		assert.ok(oversized.length <= ACTION_SUMMARY_MAX_CHARS, `length ${oversized.length}`);
+		assert.match(oversized, /truncated/);
+	});
+
+	it("spends the model-result budget in priority order rather than truncating the tail", () => {
+		const assembled = assembleModelResult({
+			answer: "y".repeat(MODEL_RESULT_MAX_CHARS),
+			answerOmittedChars: 1_000,
+			actions: "[Claude Code actions: Read(a.ts)]",
+			annotations: ["[permission mode: requested auto, runtime default.]", "[permission denials: Bash.]"],
+		});
+
+		assert.ok(assembled.length <= MODEL_RESULT_MAX_CHARS, `length ${assembled.length}`);
+		assert.match(assembled, /^y+/);
+		assert.match(assembled, /\[Claude Code actions: Read\(a\.ts\)\]/);
+		assert.match(assembled, /runtime default/);
+		assert.match(assembled, /permission denials: Bash/);
+		// The answer absorbed the shortfall, and says by how much.
+		assert.match(assembled, /\[… truncated 1[,\d]* chars\]/);
+	});
+
+	it("keeps roughly half the model-result budget for the answer whatever the other segments claim", () => {
+		const assembled = assembleModelResult({
+			answer: "y".repeat(MODEL_RESULT_MAX_CHARS),
+			actions: `[Claude Code actions: ${"a".repeat(MODEL_RESULT_MAX_CHARS)}]`,
+			annotations: Array.from({ length: 40 }, (_, i) => `[annotation ${i} ${"p".repeat(2_000)}]`),
+		});
+		const [answer] = assembled.split("\n\n");
+
+		assert.ok(assembled.length <= MODEL_RESULT_MAX_CHARS, `length ${assembled.length}`);
+		assert.ok(answer.startsWith("yyy") && answer.length > MODEL_RESULT_MAX_CHARS * 0.49, `answer kept ${answer.length}`);
+		assert.match(assembled, /annotation 0/);
+	});
+
+	it("redacts each assembled segment even when nothing needs truncation", () => {
+		const assembled = assembleModelResult({
+			answer: "token sk-ant-abcdefghijklmnop",
+			actions: "[Claude Code actions: Bash(curl -H authorization=leaked-value)]",
+			annotations: ["[api_key=annotation-secret]"],
+		});
+
+		assert.doesNotMatch(assembled, /abcdefghijklmnop|leaked-value|annotation-secret/);
 	});
 
 	it("redacts common credentials before retaining text", () => {

@@ -11,31 +11,40 @@ import assert from "node:assert/strict";
 
 const { __test } = await import("../src/index.js");
 const { finalizeAskClaudeResult, askClaudeResultIsError } = __test;
+const { createDelegationSnapshot } = await import("../src/delegation-events.js");
+const { MODEL_RESULT_MAX_CHARS } = await import("../src/delegation-retention.js");
 
-function runResult(overrides = {}) {
+/**
+ * A run result carries a complete snapshot, so the fixture builds one rather
+ * than handing finalization a partial object it would have to tolerate.
+ * `responseText` mirrors the snapshot the way `runDelegation` returns it.
+ */
+function runResult({ responseText = "", snapshot = {}, ...overrides } = {}) {
 	return {
-		responseText: "",
+		responseText,
 		stopReason: "stop",
 		permissionDenials: [],
-		snapshot: {},
 		messageCount: 1,
 		...overrides,
+		snapshot: { ...createDelegationSnapshot(0), responseText, ...snapshot },
 	};
 }
 
-function finalize(overrides = {}, extras = {}) {
+function readTool(path) {
+	return { id: `read-${path}`, name: "Read", status: "succeeded", input: { file_path: path }, startedAt: 0, updatedAt: 1, parentToolUseId: null };
+}
+
+function finalize(overrides = {}) {
 	return finalizeAskClaudeResult({
 		result: runResult(overrides),
 		prompt: "why?",
-		actions: "",
 		executionTime: 1200,
-		...extras,
 	});
 }
 
 describe("AskClaude finalization", () => {
 	it("returns Claude's answer and its actions on a normal stop", () => {
-		const { content, details } = finalize({ responseText: "ANSWER" }, { actions: "Read(a.ts)" });
+		const { content, details } = finalize({ responseText: "ANSWER", snapshot: { tools: [readTool("a.ts")] } });
 
 		assert.equal(content[0].text, "ANSWER\n\n[Claude Code actions: Read(a.ts)]");
 		assert.equal(details.cancelled, undefined);
@@ -47,10 +56,11 @@ describe("AskClaude finalization", () => {
 	});
 
 	it("tells the model a cancelled run was cancelled and keeps its partial work", () => {
-		const { content, details } = finalize(
-			{ stopReason: "cancelled", responseText: "half an ans" },
-			{ actions: "Read(a.ts)" },
-		);
+		const { content, details } = finalize({
+			stopReason: "cancelled",
+			responseText: "half an ans",
+			snapshot: { tools: [readTool("a.ts")] },
+		});
 
 		assert.match(content[0].text, /^Cancelled by user\./);
 		assert.match(content[0].text, /half an ans/);
@@ -112,5 +122,48 @@ describe("AskClaude finalization", () => {
 
 		assert.equal(content[0].text, "FINAL ANSWER");
 		assert.equal(details.snapshot.resultText, "FINAL ANSWER");
+	});
+
+	it("keeps policy annotations when a cap-sized answer would otherwise push them off the end", () => {
+		const { content } = finalize({
+			snapshot: {
+				resultText: "y".repeat(MODEL_RESULT_MAX_CHARS),
+				resultOmittedChars: 4_000,
+				tools: [readTool("a.ts")],
+			},
+			permission: { requested: "auto", effective: "default", overridden: true },
+			permissionDenials: [{ toolName: "Bash", toolUseId: "t1", reasonType: "rule", message: "denied" }],
+		});
+		const text = content[0].text;
+
+		assert.ok(text.length <= MODEL_RESULT_MAX_CHARS, `length ${text.length}`);
+		assert.match(text, /^y{100}/);
+		assert.match(text, /requested auto, runtime default/);
+		assert.match(text, /permission denials: Bash \(rule\)/);
+		assert.match(text, /\[Claude Code actions: Read\(a\.ts\)\]/);
+		// One accurate marker: the reducer's omissions plus what this budget cut.
+		const markers = text.match(/\[… truncated \d+ chars\]/g);
+		assert.equal(markers.length, 1);
+		assert.ok(Number(markers[0].match(/(\d+)/)[1]) > 4_000);
+	});
+
+	it("keeps the whole model-facing result inside its cap when every segment is oversized", () => {
+		const { content } = finalize({
+			snapshot: {
+				resultText: "y".repeat(MODEL_RESULT_MAX_CHARS * 2),
+				tools: Array.from({ length: 400 }, (_, index) => readTool(`file-${index}-${"x".repeat(60)}.ts`)),
+			},
+			permission: { requested: "auto", effective: "default", overridden: true },
+			permissionDenials: Array.from({ length: 40 }, (_, index) => ({
+				toolName: `Tool${index}`, toolUseId: `t${index}`, reasonType: "rule", message: "denied",
+			})),
+		});
+		const text = content[0].text;
+
+		assert.ok(text.length <= MODEL_RESULT_MAX_CHARS, `length ${text.length}`);
+		// The answer still gets at least the floor the budget reserves for it.
+		assert.ok(text.startsWith("y".repeat(MODEL_RESULT_MAX_CHARS / 2)));
+		assert.match(text, /requested auto, runtime default/);
+		assert.match(text, /permission denials: Tool0 \(rule\)/);
 	});
 });
