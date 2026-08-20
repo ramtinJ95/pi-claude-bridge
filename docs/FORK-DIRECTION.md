@@ -512,12 +512,67 @@ authoritative SDK result is now retained separately from multi-turn streamed
 narration and wins for the final model/UI answer; terminal failure text is
 visible even when a failed snapshot exists; and capped fields now receive one
 accurate truncation marker rather than a second pass that replaced the true
-omission count. All 259 unit tests, typecheck, package dry-run, and diff checks
-pass. The live Agent SDK contract suite also passes (17 passed, one
-environment-dependent skip). The remaining step for Phase 2 is disposition of
-the review's non-blocking tradeoffs and merge of this branch; Phase 3 should then
-start from its retained snapshot rather than inventing a second background-job
-event format.
+omission count.
+
+The review's non-blocking items were then dispositioned. These were accepted and
+implemented in the same PR:
+
+- **Policy annotations survive the cap.** The bounded model-facing result no
+  longer joins its segments and truncates the tail, which silently dropped a
+  permission override or denial exactly when the answer reached
+  `MODEL_RESULT_MAX_CHARS`. `assembleModelResult` spends one total budget in
+  explicit priority order — policy annotations, then the action summary, then
+  the answer — and the answer absorbs the shortfall because it is the only
+  segment whose loss is self-describing. It is budgeted from the runner's own
+  snapshot text plus its omission count, so a capped answer still carries one
+  accurate marker rather than a second marker stacked on the display copy. The
+  authoritative SDK result still wins over streamed narration. The action
+  summary has its own named cap (`ACTION_SUMMARY_MAX_CHARS`), annotations have
+  `POLICY_ANNOTATION_MAX_CHARS`, and a floor keeps the lower-priority segments
+  from starving the answer even if a caller hands over an unbounded one.
+- **One retained record per result.** The action summary is now derived inside
+  finalization from the retained snapshot instead of being passed in from the
+  raw one, and the error path summarizes the retained snapshot too, so the
+  model-facing summary, persisted details, and rendered tool list describe the
+  same bounded, redacted record on both the success and failure paths.
+- **One requested model.** AskClaude execute resolves `requestedModel` once from
+  `ASK_CLAUDE_DEFAULT_MODEL` and uses it for the delegation call and for all
+  partial, final, and error metadata, so the query and the model shown beside it
+  cannot disagree.
+- **No test-shaped production cast.** Finalization requires a real complete
+  `DelegationSnapshot`; the `as DelegationSnapshot` cast and the
+  `responseText` fallback that existed only to tolerate a `{}` fixture are gone,
+  and the unit fixtures build snapshots with `createDelegationSnapshot`.
+- **Boundary-split credential fragments are documented, not defended against.**
+  Redaction needs a whole credential in one string, and retention cuts strings
+  at boundaries chosen for length. A secret straddling one leaves an unmatched
+  fragment on the retained side. The caps are the real containment and
+  redaction is a courtesy pass over what remains; a streaming secret detector
+  carrying state across every field was rejected as more machinery than this
+  display path warrants.
+
+Three non-blocking items were deferred rather than implemented:
+
+- **A live subagent stream-event probe** would pin whether nested `Agent` calls
+  emit the `parent_tool_use_id` relation the renderer is prepared to indent.
+  The uncertainty is real and belongs in Phase 3, where nested background jobs
+  make it load-bearing and `tests/int-cc-contracts.mjs` can assert it against
+  the installed SDK.
+- **Expanded render performance** rebuilds every child component for each
+  expanded frame. Measure it against a large retained snapshot before
+  optimizing; a caching layer added on suspicion would be parallel rendering
+  machinery this phase deliberately avoided.
+- **The oversized-input compact label** stays as-is: a tool input over its field
+  cap renders as visibly truncated JSON rather than a structured summary, which
+  is honest about what was retained.
+
+Final validation on this branch: 265 unit tests, typecheck, `npm pack`
+dry-run, and `git diff --check` all pass. The live Agent SDK contract suite
+passed after the blocker fixes (17 passed, one environment-dependent skip) and
+was not rerun for the disposition changes, which add no new undocumented SDK
+behavior assumption. The remaining step for Phase 2 is merge of this branch;
+Phase 3 should start from its retained snapshot rather than inventing a second
+background-job event format.
 
 ### Phase 3: background job core
 
