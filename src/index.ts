@@ -1,7 +1,7 @@
 import { calculateCost, StringEnum, type AssistantMessage, type AssistantMessageEventStream, type Context, type ImageContent, type Model, type SimpleStreamOptions, type TextContent, type Tool, type UserMessage } from "@earendil-works/pi-ai";
 import * as piAi from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
-import { buildSessionContext, compact, generateBranchSummary, keyHint, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, compact, generateBranchSummary, type BranchSummaryResult, type CompactionEntry, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { query, resolveSettings, type EffortLevel, type PermissionMode, type SDKMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
@@ -26,12 +26,19 @@ import {
 import { collectCarriedAttachments, placeCarriedAttachments, type CarriedAttachment } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
 import { askClaudeContextTags, buildAskClaudeContract } from "./askclaude-contract.js";
-import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
+import {
+	buildAskClaudePartialUpdate,
+	buildSnapshotActionSummary,
+	renderAskClaudeResult,
+	retainAskClaudePrompt,
+	retainDelegationSnapshot,
+	type AskClaudeResultDetails,
+} from "./askclaude-ui.js";
+import { MODEL_RESULT_MAX_CHARS, retainText } from "./delegation-retention.js";
 import { buildDelegationQueryOptions } from "./delegation-options.js";
 import { runDelegation, type DelegationRunResult } from "./delegation-runner.js";
 import {
 	sdkResultErrorText as resultErrorText,
-	type DelegationPermissionDenial,
 	type DelegationSnapshot,
 } from "./delegation-events.js";
 import {
@@ -42,7 +49,6 @@ import {
 	resolveProviderPermissionPolicy,
 	summarizeManagedPolicy,
 	type ManagedPolicySummary,
-	type PermissionObservation,
 } from "./query-policy.js";
 
 // Compat (#2): use factory if available (pi-ai ≥0.66), else fall back to constructor (gsd-pi etc.)
@@ -179,12 +185,6 @@ const PROVIDER_HOOK_SUPPORT = Object.freeze({
 	onPayload: false,
 	onResponse: false,
 });
-
-// Claude Code's own builtin tools, for the AskClaude path where CC really runs
-// them. The provider path never sees these — it starts CC with `tools: []`.
-const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
-	read: "read", write: "write", edit: "edit", bash: "bash",
-};
 
 // MODELS is buildModels(getModels("anthropic")) — projection kept in models.js.
 const MODELS = buildModels(getModels("anthropic"));
@@ -766,41 +766,7 @@ export const __test = {
 	askClaudeResultIsError,
 };
 
-// --- Provider helpers: tool name mapping ---
-
-// AskClaude path: CC runs its own tools, so builtin names are real.
-function mapToolName(name: string): string {
-	const normalized = name.toLowerCase();
-	const builtin = SDK_TO_PI_TOOL_NAME[normalized];
-	if (builtin) return builtin;
-	if (normalized.startsWith(MCP_TOOL_PREFIX)) return name.slice(MCP_TOOL_PREFIX.length);
-	return name;
-}
-
-function updateAskClaudeToolCalls(
-	target: Map<string, ToolCallState>,
-	snapshot: DelegationSnapshot,
-): void {
-	target.clear();
-	for (const tool of snapshot.tools) {
-		target.set(tool.id, {
-			name: mapToolName(tool.name),
-			status: tool.status,
-			rawInput: tool.input,
-		});
-	}
-}
-
-interface AskClaudeResultDetails {
-	prompt?: string;
-	executionTime?: number;
-	actions?: string;
-	error?: boolean;
-	cancelled?: boolean;
-	permission?: PermissionObservation;
-	permissionDenials?: DelegationPermissionDenial[];
-	managedPolicy?: ManagedPolicySummary;
-}
+// --- AskClaude result shaping ---
 
 /**
  * Promote AskClaude's own failure flag to pi's `toolResult.isError`.
@@ -832,19 +798,29 @@ function finalizeAskClaudeResult(input: {
 	prompt: string;
 	actions: string;
 	executionTime: number;
+	capabilityMode?: "full" | "read" | "none";
+	requestedModel?: string;
+	thinking?: string;
+	isolated?: boolean;
 }): { content: { type: "text"; text: string }[]; details: AskClaudeResultDetails } {
 	const { result, actions } = input;
+	const snapshot = retainDelegationSnapshot({
+		...result.snapshot,
+		responseText: result.snapshot.responseText ?? result.responseText,
+	} as DelegationSnapshot);
+	const responseText = snapshot.responseText;
+	const retainedActions = retainText(actions, MODEL_RESULT_MAX_CHARS);
 	const cancelled = result.stopReason === "cancelled";
 	const segments: string[] = [];
 
 	if (cancelled) {
-		segments.push(result.responseText
-			? `Cancelled by user. Partial response before cancellation:\n\n${result.responseText}`
+		segments.push(responseText
+			? `Cancelled by user. Partial response before cancellation:\n\n${responseText}`
 			: "Cancelled by user before Claude Code produced a response.");
-	} else if (result.responseText) {
-		segments.push(result.responseText);
+	} else if (responseText) {
+		segments.push(responseText);
 	}
-	if (actions) segments.push(`[Claude Code actions: ${actions}]`);
+	if (retainedActions) segments.push(`[Claude Code actions: ${retainedActions}]`);
 	if (result.permission?.overridden) {
 		const policyLabels = managedPolicyLabels(result.managedPolicy);
 		segments.push(`[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`);
@@ -858,15 +834,20 @@ function finalizeAskClaudeResult(input: {
 	}
 
 	return {
-		content: [{ type: "text" as const, text: segments.join("\n\n") }],
+		content: [{ type: "text" as const, text: retainText(segments.join("\n\n"), MODEL_RESULT_MAX_CHARS) }],
 		details: {
-			prompt: input.prompt,
+			prompt: retainAskClaudePrompt(input.prompt),
 			executionTime: input.executionTime,
-			actions,
+			actions: retainedActions,
+			capabilityMode: input.capabilityMode,
+			requestedModel: input.requestedModel,
+			thinking: input.thinking,
+			isolated: input.isolated,
 			...(cancelled ? { cancelled: true, error: true } : {}),
 			permission: result.permission,
-			permissionDenials: result.permissionDenials,
+			permissionDenials: snapshot.permissionDenials,
 			managedPolicy: result.managedPolicy,
+			snapshot,
 		},
 	};
 }
@@ -2217,51 +2198,8 @@ export default function (pi: ExtensionAPI) {
 				if (args.prompt.length > PREVIEW_MAX_CHARS || args.prompt.split("\n").length > PREVIEW_MAX_LINES) text += theme.fg("dim", " …");
 				return new Text(text, 0, 0);
 			},
-			renderResult(result, { expanded, isPartial }, theme) {
-				if (isPartial) {
-					const status = result.content[0]?.type === "text" ? result.content[0].text : "working...";
-					return new Text(theme.fg("mdLink", "◉ Claude Code ") + theme.fg("muted", status), 0, 0);
-				}
-
-				const details = result.details as AskClaudeResultDetails | undefined;
-				const body = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-				let text = details?.cancelled
-					? theme.fg("warning", "⊘ Claude Code cancelled")
-					: details?.error
-						? theme.fg("error", "✗ Claude Code error")
-						: theme.fg("mdLink", "✓ Claude Code");
-
-				if (details?.executionTime) text += ` ${theme.fg("dim", `${(details.executionTime / 1000).toFixed(1)}s`)}`;
-				if (details?.actions) text += ` ${theme.fg("muted", details.actions)}`;
-				if (details?.permission) {
-					const permissionLabel = details.permission.overridden
-						? `${details.permission.requested}→${details.permission.effective}`
-						: details.permission.effective;
-					text += ` ${theme.fg(details.permission.overridden ? "warning" : "dim", `permission=${permissionLabel}`)}`;
-				} else {
-					text += ` ${theme.fg("dim", `requested=${askPermissionMode}`)}`;
-				}
-				if (details?.permissionDenials?.length) {
-					text += ` ${theme.fg("warning", `${details.permissionDenials.length} denied`)}`;
-				}
-				const policyLabels = managedPolicyLabels(details?.managedPolicy);
-				if (policyLabels.length) text += ` ${theme.fg("warning", "managed-policy")}`;
-
-				if (expanded) {
-					if (policyLabels.length) text += `\n${theme.fg("warning", `Managed policy: ${policyLabels.join(", ")}`)}`;
-					if (details?.prompt) text += `\n${theme.fg("dim", `Prompt: ${details.prompt}`)}`;
-					if (details?.prompt && body) text += `\n${theme.fg("dim", "─".repeat(40))}`;
-					if (body) text += `\n${theme.fg("toolOutput", body)}`;
-				} else {
-					const truncated = body.length > PREVIEW_MAX_CHARS ? body.substring(0, PREVIEW_MAX_CHARS) : body;
-					const lines = truncated.split("\n").slice(0, PREVIEW_MAX_LINES);
-					if (lines.length) text += `\n${theme.fg("toolOutput", lines.join("\n"))}`;
-					if (body.length > PREVIEW_MAX_CHARS || body.split("\n").length > PREVIEW_MAX_LINES) text += `\n${theme.fg("dim", `… (${keyHint("app.tools.expand", "to expand")})`)}`;
-
-				}
-
-				return new Text(text, 0, 0);
+			renderResult(result, options, theme, context) {
+				return renderAskClaudeResult(result, options, theme, context, askPermissionMode);
 			},
 			async execute(_id, params, signal, onUpdate, ctx) {
 				// Guard: circular delegation
@@ -2275,45 +2213,84 @@ export default function (pi: ExtensionAPI) {
 
 				const mode = (params.mode ?? defaultMode) as "full" | "read" | "none";
 				const isolated = params.isolated ?? defaultIsolated;
-				const toolCalls = new Map<string, ToolCallState>();
 				const start = Date.now();
+				let lastSnapshot: DelegationSnapshot | undefined;
+				let lastPublishedAt = 0;
+				let pendingPublish: ReturnType<typeof setTimeout> | undefined;
 
-				const progressInterval = setInterval(() => {
-					const elapsed = ((Date.now() - start) / 1000).toFixed(0);
-					const summary = buildActionSummary(toolCalls);
-					const status = summary ? `${elapsed}s — ${summary}` : `${elapsed}s — working...`;
-					onUpdate?.({
-						content: [{ type: "text", text: status }],
-						details: { prompt: params.prompt, executionTime: Date.now() - start },
-					});
-				}, 1000);
+				const publishSnapshot = (force = false) => {
+					if (!onUpdate || !lastSnapshot) return;
+					const now = Date.now();
+					const delay = 100 - (now - lastPublishedAt);
+					if (!force && delay > 0) {
+						pendingPublish ??= setTimeout(() => {
+							pendingPublish = undefined;
+							publishSnapshot(true);
+						}, delay);
+						return;
+					}
+					if (pendingPublish) clearTimeout(pendingPublish);
+					pendingPublish = undefined;
+					lastPublishedAt = now;
+					onUpdate(buildAskClaudePartialUpdate(lastSnapshot, {
+						prompt: params.prompt,
+						executionTime: now - start,
+						capabilityMode: mode,
+						requestedModel: params.model ?? "opus",
+						thinking: params.thinking,
+						isolated,
+					}));
+				};
+				const progressInterval = setInterval(() => publishSnapshot(true), 1000);
+				const stopPublishing = () => {
+					clearInterval(progressInterval);
+					if (pendingPublish) clearTimeout(pendingPublish);
+				};
 
 				try {
 					const result = await runAskClaudeDelegation(params.prompt, mode, signal, {
 						systemPrompt: ctx.getSystemPrompt(),
 						appendSkills: askConf?.appendSkills,
-						onSnapshot: (snapshot) => updateAskClaudeToolCalls(toolCalls, snapshot),
+						onSnapshot: (snapshot) => {
+							lastSnapshot = snapshot;
+							publishSnapshot();
+						},
 						model: params.model,
 						thinking: params.thinking,
 						isolated,
 						permissionMode: askConf?.permissionMode,
 						context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
 					});
-					clearInterval(progressInterval);
-					onUpdate?.({ content: [{ type: "text", text: "" }], details: {} });
+					stopPublishing();
 					return finalizeAskClaudeResult({
 						result,
 						prompt: params.prompt,
-						actions: buildActionSummary(toolCalls),
+						actions: buildSnapshotActionSummary(result.snapshot),
 						executionTime: Date.now() - start,
+						capabilityMode: mode,
+						requestedModel: params.model ?? "opus",
+						thinking: params.thinking,
+						isolated,
 					});
 				} catch (err) {
-					clearInterval(progressInterval);
+					stopPublishing();
 					debug(`askClaude error: mode=${mode}, model=${params.model ?? "default"}, isolated=${isolated}, elapsed=${((Date.now() - start) / 1000).toFixed(1)}s, error=`, err);
-					const msg = errorMessage(err);
+					const msg = retainText(errorMessage(err), MODEL_RESULT_MAX_CHARS);
+					const retainedSnapshot = lastSnapshot ? retainDelegationSnapshot(lastSnapshot) : undefined;
 					return {
 						content: [{ type: "text" as const, text: `Error: ${msg}` }],
-						details: { prompt: params.prompt, executionTime: Date.now() - start, error: true },
+						details: {
+							prompt: retainAskClaudePrompt(params.prompt),
+							executionTime: Date.now() - start,
+							actions: lastSnapshot ? buildSnapshotActionSummary(lastSnapshot) : undefined,
+							capabilityMode: mode,
+							requestedModel: params.model ?? "opus",
+							thinking: params.thinking,
+							isolated,
+							error: true,
+							permissionDenials: retainedSnapshot?.permissionDenials,
+							snapshot: retainedSnapshot,
+						},
 					};
 				}
 			},

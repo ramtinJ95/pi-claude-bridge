@@ -51,6 +51,14 @@ You could also create skills or add something to AGENTS.md to e.g. "Always call 
 - **`thinking`** — effort level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`
 - **`isolated`** — when `true`, Claude gets a fresh conversation with no Pi history or persisted Claude session (default: `true`). This is conversation isolation, not a hermetic process: working-directory access, settings, sandbox, and managed policy still apply.
 
+While a call runs, AskClaude streams Claude's response and a compact tool/action
+summary into one Pi tool row. Expand the row to inspect emitted thinking
+summaries, nested tool inputs/outputs and durations, the retained event timeline,
+usage/cost, session metadata, and observed permission or managed-policy state.
+This is emitted summary text, not private chain-of-thought. Persisted display
+details use bounded fields, visible truncation, and best-effort credential
+redaction; the model-facing result is separately capped at about 16k characters.
+
 ## Configuration
 
 Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config directory, usually `.pi/claude-bridge.json` (project; merged over global).

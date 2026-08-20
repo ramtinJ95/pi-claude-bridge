@@ -93,4 +93,14 @@ describe("AskClaude finalization", () => {
 		assert.equal(askClaudeResultIsError({ toolName: "bash", isError: false, details: cancelled }), undefined);
 		assert.equal(askClaudeResultIsError({ toolName: "AskClaude", isError: true, details: cancelled }), undefined);
 	});
+
+	it("bounds and redacts the model-facing result and retained snapshot", () => {
+		const secret = "sk-ant-abcdefghijklmnop";
+		const { content, details } = finalize({ responseText: `${secret}\n${"x".repeat(20_000)}` });
+
+		assert.ok(content[0].text.length <= 16_000);
+		assert.doesNotMatch(content[0].text, /sk-ant-/);
+		assert.match(content[0].text, /truncated/);
+		assert.doesNotMatch(details.snapshot.responseText, /sk-ant-/);
+	});
 });
