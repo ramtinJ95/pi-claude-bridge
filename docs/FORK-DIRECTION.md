@@ -421,6 +421,26 @@ managed read-path key locations. These are not prerequisites for Phase 2.
   parallel rendering framework.
 - Keep final model-facing output bounded.
 
+Deliver Phase 2 as two independently reviewable PRs:
+
+1. **Delegation engine and normalized events** *(in progress on
+   `phase-2-delegation-engine`)* — extract delegation query
+   options and one Claude-native runner, normalize the SDK stream into a stable
+   snapshot, and replace `promptAndWait` while preserving the existing
+   `AskClaude` UI and model-facing behavior. Characterize fixture replay,
+   tool-result matching, usage, unknown events, cancellation, and cleanup. The
+   provider must remain outside this runner.
+2. **Rich `AskClaude` observability** — stream those snapshots through Pi,
+   render compact and expanded live details with themed Markdown, surface tool
+   inputs/results/durations, emitted thinking summaries, usage, permission and
+   session metadata, and apply bounded retention, visible truncation,
+   credential redaction, and a bounded model-facing result.
+
+For the second PR, prefer a small retained record: approximately 16k characters
+for the model-facing answer, 2k per tool input or output, 32k/100 events for the
+retained timeline, and 4k for emitted thinking summaries. Keep these as named,
+independently tested constants rather than persistence-format promises.
+
 ### Phase 3: background job core
 
 - Implement the job manager and lifecycle state machine.
