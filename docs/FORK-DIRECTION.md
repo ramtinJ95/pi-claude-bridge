@@ -442,13 +442,47 @@ retained timeline, and 4k for emitted thinking summaries. Keep these as named,
 independently tested constants rather than persistence-format promises.
 
 PR #4's implementation and validation are complete: typecheck, package dry-run,
-all 224 unit tests, and the live Agent SDK contract suite pass (17 passed, one
-environment-dependent skip). A Fable/high AskClaude review found two blockers
-and four non-blocking items. The cancellation and resumed-session replay
-blockers were fixed, as were failed-snapshot fallback text, single policy
-resolution, and result-helper type narrowing. Enabling and documenting partial
-SDK messages is intentionally deferred to the rich-observability PR, where live
-streaming becomes user-visible and can be tested with its renderer.
+and all 243 unit tests pass. The live Agent SDK contract suite passed before the
+final review round (17 passed, one environment-dependent skip) and was not rerun
+because the final changes add no new undocumented SDK behavior assumption. A
+Fable/high AskClaude review found two blockers and four non-blocking items. The
+cancellation and resumed-session replay blockers were fixed, as were
+failed-snapshot fallback text, single policy resolution, and result-helper type
+narrowing.
+
+A final Opus review produced these accepted fixes:
+
+- **Cancellation is terminal and model-visible.** `runDelegation` still resolves
+  on cancellation so partial work survives, but the AskClaude glue now finalizes
+  that into a result that says it was cancelled, keeps the partial answer and
+  action summary, and carries `cancelled`/`error` details. Pi's
+  `AgentToolResult` has no `isError` field — only a throw sets it, and a throw
+  discards details — so a `tool_result` hook promotes those details to the real
+  `toolResult.isError`.
+- **A missing result is a failure.** The runner tracks whether an authoritative
+  SDK `result` arrived. An iterator that ends without one, and without an abort,
+  publishes a failed snapshot and throws instead of reporting success; an
+  assistant error seen earlier becomes the failure text.
+- **`SDKAssistantMessage.error` is preserved** as an `assistant_error` event and
+  snapshot field. It does not end the run on its own, since an authoritative
+  result may still follow.
+- **`parent_tool_use_id` is preserved** as `parentToolUseId` on normalized
+  tool events and tool records. The `tool_use` frame is authoritative for the
+  subagent relation; progress and result frames may only fill it in, never
+  flatten it. The UI stays flat for now.
+- **Diagnostics say `unhandled_sdk_message`, not `unknown`.** The SDK documents
+  many more frames than delegation consumes; a brittle ignore list was rejected
+  in favor of a name that only claims this reducer did not handle the frame.
+- **`isolated: true` with `resumeSessionId` is unrepresentable** through a
+  discriminated union, with the caller branching rather than casting.
+- Terminal lifecycle ownership stays in `runDelegation`: the reducer cannot infer
+  iterator completion, so a snapshot stays `running` until the runner finalizes
+  it.
+
+Enabling and documenting partial SDK messages is intentionally deferred to the
+rich-observability PR, where live streaming becomes user-visible and can be
+tested with its renderer. So are rich tool-row rendering, nested/subagent tree
+display, retention caps, visible truncation, and redaction.
 
 ### Phase 3: background job core
 
