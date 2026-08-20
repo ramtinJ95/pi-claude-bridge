@@ -423,8 +423,8 @@ managed read-path key locations. These are not prerequisites for Phase 2.
 
 Deliver Phase 2 as two independently reviewable PRs:
 
-1. **Delegation engine and normalized events** *(in progress on
-   `phase-2-delegation-engine`)* — extract delegation query
+1. **Delegation engine and normalized events** *([PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4)
+   open on `phase-2-delegation-engine`)* — extract delegation query
    options and one Claude-native runner, normalize the SDK stream into a stable
    snapshot, and replace `promptAndWait` while preserving the existing
    `AskClaude` UI and model-facing behavior. Characterize fixture replay,
@@ -440,6 +440,15 @@ For the second PR, prefer a small retained record: approximately 16k characters
 for the model-facing answer, 2k per tool input or output, 32k/100 events for the
 retained timeline, and 4k for emitted thinking summaries. Keep these as named,
 independently tested constants rather than persistence-format promises.
+
+PR #4's implementation and validation are complete: typecheck, package dry-run,
+all 224 unit tests, and the live Agent SDK contract suite pass (17 passed, one
+environment-dependent skip). A Fable/high AskClaude review found two blockers
+and four non-blocking items. The cancellation and resumed-session replay
+blockers were fixed, as were failed-snapshot fallback text, single policy
+resolution, and result-helper type narrowing. Enabling and documenting partial
+SDK messages is intentionally deferred to the rich-observability PR, where live
+streaming becomes user-visible and can be tested with its renderer.
 
 ### Phase 3: background job core
 
