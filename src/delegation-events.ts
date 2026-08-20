@@ -1,6 +1,7 @@
 import type {
 	ModelUsage,
 	PermissionMode,
+	SDKAssistantMessageError,
 	SDKMessage,
 	SDKRateLimitInfo,
 	SDKResultMessage,
@@ -33,6 +34,7 @@ export interface DelegationToolCall {
 	completedAt?: number;
 	durationMs?: number;
 	elapsedSeconds?: number;
+	parentToolUseId: string | null;
 }
 
 export interface DelegationPermissionDenial {
@@ -44,7 +46,7 @@ export interface DelegationPermissionDenial {
 }
 
 export interface DelegationDiagnostic {
-	kind: "unknown_sdk_message" | "unknown_stream_event";
+	kind: "unhandled_sdk_message" | "unknown_stream_event";
 	label: string;
 	at: number;
 }
@@ -65,6 +67,7 @@ export interface DelegationSnapshot {
 	resultSubtype?: string;
 	stopReason?: string | null;
 	error?: string;
+	assistantError?: SDKAssistantMessageError;
 	usage?: DelegationUsage;
 	rateLimit?: SDKRateLimitInfo;
 	retry?: {
@@ -80,10 +83,11 @@ export type DelegationEvent =
 	| { type: "session"; at: number; sessionId: string; cwd: string; model: string; permissionMode: PermissionMode }
 	| { type: "text_delta"; at: number; text: string }
 	| { type: "thinking_delta"; at: number; text: string }
-	| { type: "tool_start"; at: number; id: string; name: string; input?: unknown }
-	| { type: "tool_input"; at: number; id: string; name: string; input: unknown }
-	| { type: "tool_progress"; at: number; id: string; name: string; elapsedSeconds: number }
-	| { type: "tool_result"; at: number; id: string; output: string; isError: boolean }
+	| { type: "tool_start"; at: number; id: string; name: string; input?: unknown; parentToolUseId: string | null }
+	| { type: "tool_input"; at: number; id: string; name: string; input: unknown; parentToolUseId: string | null }
+	| { type: "tool_progress"; at: number; id: string; name: string; elapsedSeconds: number; parentToolUseId: string | null }
+	| { type: "tool_result"; at: number; id: string; output: string; isError: boolean; parentToolUseId: string | null }
+	| { type: "assistant_error"; at: number; error: SDKAssistantMessageError }
 	| { type: "permission_denial"; at: number; denial: DelegationPermissionDenial }
 	| { type: "usage"; at: number; usage: DelegationUsage }
 	| { type: "result"; at: number; subtype: string; stopReason: string | null; fallbackText?: string }
@@ -143,6 +147,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 					id: event.content_block.id,
 					name: event.content_block.name,
 					input: event.content_block.input,
+					parentToolUseId: message.parent_tool_use_id,
 				}];
 			}
 			return [];
@@ -163,9 +168,10 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 
 	if (message.type === "assistant") {
 		const events: DelegationEvent[] = [];
+		if (message.error) events.push({ type: "assistant_error", at, error: message.error });
 		for (const block of message.message?.content ?? []) {
 			if (block.type === "tool_use") {
-				events.push({ type: "tool_input", at, id: block.id, name: block.name, input: block.input });
+				events.push({ type: "tool_input", at, id: block.id, name: block.name, input: block.input, parentToolUseId: message.parent_tool_use_id });
 			}
 		}
 		return events;
@@ -183,6 +189,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 				id: block.tool_use_id,
 				output: contentText(block.content),
 				isError: block.is_error === true,
+				parentToolUseId: message.parent_tool_use_id,
 			});
 		}
 		return events;
@@ -195,6 +202,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 			id: message.tool_use_id,
 			name: message.tool_name,
 			elapsedSeconds: message.elapsed_time_seconds,
+			parentToolUseId: message.parent_tool_use_id,
 		}];
 	}
 
@@ -260,14 +268,14 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 			}];
 		}
 		if (["status", "compact_boundary"].includes(message.subtype)) return [];
-		return [{ type: "diagnostic", at, kind: "unknown_sdk_message", label: `system:${message.subtype}` }];
+		return [{ type: "diagnostic", at, kind: "unhandled_sdk_message", label: `system:${message.subtype}` }];
 	}
 
 	if (message.type === "rate_limit_event") {
 		return [{ type: "rate_limit", at, info: message.rate_limit_info }];
 	}
 
-	return [{ type: "diagnostic", at, kind: "unknown_sdk_message", label: message.type }];
+	return [{ type: "diagnostic", at, kind: "unhandled_sdk_message", label: message.type }];
 }
 
 function upsertTool(
@@ -283,7 +291,24 @@ function upsertTool(
 	return next;
 }
 
-/** Apply one normalized event without mutating the prior snapshot. */
+/**
+ * Parent relation for a tool already present in the snapshot.
+ *
+ * The `tool_use` block is authoritative for where a call sits in the subagent
+ * tree; progress and result frames only echo it. Treat a missing echo as
+ * "unchanged" so a late frame cannot flatten a nested call to the top level.
+ */
+function echoedParent(tool: DelegationToolCall, echoed: string | null): string | null {
+	return echoed ?? tool.parentToolUseId;
+}
+
+/**
+ * Apply one normalized event without mutating the prior snapshot.
+ *
+ * Status stays `running` through a `result` event on purpose: no single message
+ * tells the reducer whether the iterator then completed, was interrupted, or
+ * died. `runDelegation` owns the terminal status.
+ */
 export function reduceDelegationEvent(
 	snapshot: DelegationSnapshot,
 	event: DelegationEvent,
@@ -306,22 +331,22 @@ export function reduceDelegationEvent(
 			return {
 				...base,
 				tools: upsertTool(snapshot.tools, event.id,
-					() => ({ id: event.id, name: event.name, status: "running", input: event.input, startedAt: event.at, updatedAt: event.at }),
-					(tool) => ({ ...tool, name: event.name, input: event.input ?? tool.input, updatedAt: event.at })),
+					() => ({ id: event.id, name: event.name, status: "running", input: event.input, startedAt: event.at, updatedAt: event.at, parentToolUseId: event.parentToolUseId }),
+					(tool) => ({ ...tool, name: event.name, input: event.input ?? tool.input, updatedAt: event.at, parentToolUseId: event.parentToolUseId })),
 			};
 		case "tool_input":
 			return {
 				...base,
 				tools: upsertTool(snapshot.tools, event.id,
-					() => ({ id: event.id, name: event.name, status: "running", input: event.input, startedAt: event.at, updatedAt: event.at }),
-					(tool) => ({ ...tool, name: event.name, input: event.input, updatedAt: event.at })),
+					() => ({ id: event.id, name: event.name, status: "running", input: event.input, startedAt: event.at, updatedAt: event.at, parentToolUseId: event.parentToolUseId }),
+					(tool) => ({ ...tool, name: event.name, input: event.input, updatedAt: event.at, parentToolUseId: event.parentToolUseId })),
 			};
 		case "tool_progress":
 			return {
 				...base,
 				tools: upsertTool(snapshot.tools, event.id,
-					() => ({ id: event.id, name: event.name, status: "running", startedAt: event.at, updatedAt: event.at, elapsedSeconds: event.elapsedSeconds }),
-					(tool) => ({ ...tool, updatedAt: event.at, elapsedSeconds: event.elapsedSeconds })),
+					() => ({ id: event.id, name: event.name, status: "running", startedAt: event.at, updatedAt: event.at, elapsedSeconds: event.elapsedSeconds, parentToolUseId: event.parentToolUseId }),
+					(tool) => ({ ...tool, updatedAt: event.at, elapsedSeconds: event.elapsedSeconds, parentToolUseId: echoedParent(tool, event.parentToolUseId) })),
 			};
 		case "tool_result":
 			return {
@@ -337,6 +362,7 @@ export function reduceDelegationEvent(
 						updatedAt: event.at,
 						completedAt: event.at,
 						durationMs: 0,
+						parentToolUseId: event.parentToolUseId,
 					}),
 					(tool) => ({
 						...tool,
@@ -346,6 +372,7 @@ export function reduceDelegationEvent(
 						updatedAt: event.at,
 						completedAt: event.at,
 						durationMs: Math.max(0, event.at - tool.startedAt),
+						parentToolUseId: echoedParent(tool, event.parentToolUseId),
 					})),
 			};
 		case "permission_denial": {
@@ -354,12 +381,14 @@ export function reduceDelegationEvent(
 				...base,
 				permissionDenials: duplicate ? snapshot.permissionDenials : [...snapshot.permissionDenials, event.denial],
 				tools: upsertTool(snapshot.tools, event.denial.toolUseId,
-					() => ({ id: event.denial.toolUseId, name: event.denial.toolName, status: "denied", error: event.denial.message, startedAt: event.at, updatedAt: event.at, completedAt: event.at, durationMs: 0 }),
+					() => ({ id: event.denial.toolUseId, name: event.denial.toolName, status: "denied", error: event.denial.message, startedAt: event.at, updatedAt: event.at, completedAt: event.at, durationMs: 0, parentToolUseId: null }),
 					(tool) => ({ ...tool, status: "denied", error: event.denial.message, updatedAt: event.at, completedAt: event.at, durationMs: Math.max(0, event.at - tool.startedAt) })),
 			};
 		}
 		case "usage":
 			return { ...base, usage: event.usage };
+		case "assistant_error":
+			return { ...base, assistantError: event.error };
 		case "result":
 			return {
 				...base,
@@ -385,11 +414,30 @@ export function reduceDelegationMessage(
 		.reduce((current, event) => reduceDelegationEvent(current, event), snapshot);
 }
 
-/** Failure text for an SDK result, or undefined when it succeeded. */
+/**
+ * Failure text for an SDK result, or undefined when it succeeded. Claude Code
+ * can report API failures (capacity, overload, prompt-too-long) with `is_error`
+ * on a success-shaped result; accepting `subtype: success` alone would hand the
+ * failure text back to Pi as Claude's answer.
+ */
 export function sdkResultErrorText(message: SDKResultMessage): string | undefined {
 	const result = message as SDKResultMessage & { error?: unknown };
 	if (result.subtype === "success") return result.is_error ? result.result || "Claude Code reported an error" : undefined;
 	if (Array.isArray(result.errors) && result.errors.length) return result.errors.map(String).join("\n");
 	if (typeof result.error === "string") return result.error;
 	return `Claude Code failed: ${result.subtype ?? "unknown result"}`;
+}
+
+/**
+ * Failure text for a stream that ended without an authoritative `result`.
+ *
+ * Every completed query ends with one. Reaching the end of the iterator without
+ * it means the subprocess died or the stream was truncated, so an assistant
+ * error observed earlier — which alone is not fatal, since a result may still
+ * follow it — becomes the best available explanation.
+ */
+export function missingResultErrorText(assistantError?: SDKAssistantMessageError): string {
+	return assistantError
+		? `Claude Code ended without a result after an assistant error: ${assistantError}`
+		: "Claude Code ended without a result";
 }

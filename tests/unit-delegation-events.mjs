@@ -107,10 +107,134 @@ describe("normalized delegation events", () => {
 		assert.equal(snapshot.responseText, "");
 	});
 
-	it("turns unrecognized SDK frames into visible diagnostics", () => {
+	it("keeps every parallel tool result matched to its own call", () => {
+		const snapshot = replay("parallel-tools");
+
+		assert.equal(snapshot.tools.length, 3);
+		const byPath = new Map(snapshot.tools.map((tool) => [tool.input.path, tool]));
+		assert.deepEqual([...byPath.keys()].sort(), ["one.txt", "three.txt", "two.txt"]);
+		assert.match(byPath.get("one.txt").output, /ONE/);
+		assert.match(byPath.get("two.txt").output, /TWO/);
+		assert.match(byPath.get("three.txt").output, /THREE/);
+		assert.ok(snapshot.tools.every((tool) => tool.status === "succeeded"));
+		assert.ok(snapshot.tools.every((tool) => tool.parentToolUseId === null));
+	});
+
+	it("records an orphan tool result rather than dropping it", () => {
+		const orphan = {
+			type: "user",
+			parent_tool_use_id: null,
+			message: {
+				role: "user",
+				content: [{ type: "tool_result", tool_use_id: "toolu_orphan", content: "boom", is_error: true }],
+			},
+		};
+
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), orphan, 5);
+
+		assert.equal(snapshot.tools.length, 1);
+		assert.deepEqual(
+			{ id: snapshot.tools[0].id, name: snapshot.tools[0].name, status: snapshot.tools[0].status },
+			{ id: "toolu_orphan", name: "unknown", status: "failed" },
+		);
+		assert.equal(snapshot.tools[0].error, "boom");
+		assert.equal(snapshot.tools[0].durationMs, 0);
+	});
+
+	it("preserves the subagent parent relation across a nested call's frames", () => {
+		const parent = "toolu_agent";
+		const messages = [
+			{
+				type: "stream_event",
+				parent_tool_use_id: parent,
+				event: { type: "content_block_start", content_block: { type: "tool_use", id: "toolu_nested", name: "Read" } },
+			},
+			{
+				type: "assistant",
+				parent_tool_use_id: parent,
+				message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_nested", name: "Read", input: { file_path: "a.ts" } }] },
+			},
+			{ type: "tool_progress", tool_use_id: "toolu_nested", tool_name: "Read", parent_tool_use_id: parent, elapsed_time_seconds: 2 },
+			{
+				type: "user",
+				parent_tool_use_id: parent,
+				message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_nested", content: "ok" }] },
+			},
+		];
+
+		let snapshot = createDelegationSnapshot(0);
+		let at = 0;
+		for (const message of messages) snapshot = reduceDelegationMessage(snapshot, message, ++at);
+
+		assert.equal(snapshot.tools.length, 1);
+		assert.equal(snapshot.tools[0].parentToolUseId, parent);
+		assert.equal(snapshot.tools[0].status, "succeeded");
+		assert.equal(snapshot.tools[0].elapsedSeconds, 2);
+	});
+
+	it("does not let a top-level frame flatten an already nested call", () => {
+		const start = {
+			type: "assistant",
+			parent_tool_use_id: "toolu_agent",
+			message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_nested", name: "Read", input: {} }] },
+		};
+		const result = {
+			type: "user",
+			parent_tool_use_id: null,
+			message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_nested", content: "ok" }] },
+		};
+
+		let snapshot = reduceDelegationMessage(createDelegationSnapshot(0), start, 1);
+		snapshot = reduceDelegationMessage(snapshot, result, 2);
+
+		assert.equal(snapshot.tools[0].parentToolUseId, "toolu_agent");
+	});
+
+	it("keeps an assistant error visible without ending the run", () => {
+		const message = { type: "assistant", parent_tool_use_id: null, error: "rate_limit", message: { role: "assistant", content: [] } };
+
+		assert.deepEqual(normalizeDelegationMessage(message, 3), [{ type: "assistant_error", at: 3, error: "rate_limit" }]);
+
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), message, 3);
+		assert.equal(snapshot.assistantError, "rate_limit");
+		assert.equal(snapshot.status, "running");
+		assert.equal(snapshot.error, undefined);
+	});
+
+	it("normalizes an api_retry system frame into retry state", () => {
+		const retry = {
+			type: "system",
+			subtype: "api_retry",
+			attempt: 2,
+			max_retries: 5,
+			retry_delay_ms: 1500,
+			error_status: 529,
+			error: "overloaded_error",
+		};
+
+		assert.deepEqual(normalizeDelegationMessage(retry, 4), [
+			{ type: "retry", at: 4, attempt: 2, maxRetries: 5, delayMs: 1500, status: 529, error: "overloaded_error" },
+		]);
+
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), retry, 4);
+		assert.deepEqual(snapshot.retry, { attempt: 2, maxRetries: 5, delayMs: 1500, status: 529, error: "overloaded_error" });
+		assert.deepEqual(snapshot.diagnostics, []);
+	});
+
+	// The SDK documents far more frames than delegation consumes. Calling those
+	// "unknown" would misreport a known-but-unused frame as an SDK surprise, and an
+	// ignore list would go stale silently, so they stay visible under a name that
+	// only claims this reducer did not handle them.
+	it("turns unhandled SDK frames into visible diagnostics", () => {
 		const events = normalizeDelegationMessage({ type: "future_event" }, 7);
 		const snapshot = events.reduce((state, event) => reduceDelegationEvent(state, event), createDelegationSnapshot(0));
 
-		assert.deepEqual(snapshot.diagnostics, [{ kind: "unknown_sdk_message", label: "future_event", at: 7 }]);
+		assert.deepEqual(snapshot.diagnostics, [{ kind: "unhandled_sdk_message", label: "future_event", at: 7 }]);
+	});
+
+	it("names an unhandled system subtype without claiming it is unknown", () => {
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), { type: "system", subtype: "hook_started" }, 8);
+
+		assert.deepEqual(snapshot.diagnostics, [{ kind: "unhandled_sdk_message", label: "system:hook_started", at: 8 }]);
 	});
 });
