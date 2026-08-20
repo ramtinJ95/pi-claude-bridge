@@ -348,8 +348,9 @@ payload or HTTP response data is fabricated.
 Phase 0 validation passed typecheck, package dry-run, the real Pi load smoke,
 and all 200 unit tests. The remaining tool-heavy live-test failures on the
 current workstation are the known managed-policy interaction with the existing
-hard-coded `bypassPermissions` mode. Replacing that behavior with configurable
-`auto` remains Phase 1 work rather than an incomplete Phase 0 baseline.
+hard-coded `bypassPermissions` mode. Phase 1 replaced that request with
+configurable `auto`; the organization policy still restricts provider MCP tools,
+now deliberately and visibly rather than as an adapter accident.
 
 - Run the existing unit suite and typecheck unchanged.
 - Raise the supported Pi baseline to 0.84.2 and pin matching development
@@ -362,7 +363,24 @@ hard-coded `bypassPermissions` mode. Replacing that behavior with configurable
   never fake an HTTP response.
 - Add characterization tests before changing undocumented session behavior.
 
-### Phase 1: correctness and policy semantics
+### Phase 1: correctness and policy semantics — complete
+
+**Completed in [PR #3](https://github.com/ramtinJ95/pi-claude-bridge/pull/3),
+merged as `1754acc`.** Capability and permission policy are now separate;
+provider, compaction, and delegation queries use configurable `auto` by default;
+and AskClaude defaults to structural read capability in a fresh isolated
+conversation. Read and none use explicit model-callable tool inventories, with
+nested `Agent` excluded from read mode. The TUI and bounded model-facing result
+surface requested/runtime permission differences, denials, and non-sensitive
+managed-policy constraints the Agent SDK can actually attribute.
+
+Phase 1 validation passed typecheck, package dry-run, all 211 unit tests, and the
+live Agent SDK contract suite (17 passed, one environment-dependent skip). A
+Fable/high review found no high-severity or security-critical issues. Accepted
+review fixes clarified provider-denial remediation and the deliberate rejection
+of blanket `allowedTools`, removed an avoidable provider-init wait, distinguished
+requested from observed permission rendering, strengthened source-wide policy
+tripwires, and corrected an integration-test claim.
 
 - Preserve PR #1's effective-default contract while changing fork defaults to
   `read` and `isolated: true`.
@@ -387,7 +405,13 @@ specific aliases such as `mcp__custom-tools__read` in Claude permission settings
 when managed permission rules are exclusive, an administrator must make that
 grant.
 
-### Phase 2: normalized events and richer blocking UI
+Deferred, non-blocking review cleanup remains available for later opportunistic
+work: retry a transient managed-settings resolution failure instead of caching
+`undefined` for the process lifetime; simplify typed result-denial access and UI
+permission resolution; and clarify the compatibility reason for probing both
+managed read-path key locations. These are not prerequisites for Phase 2.
+
+### Phase 2: normalized events and richer blocking UI — next
 
 - Extract pure query options, the delegation runner, and the normalized event
   model without routing the provider through that runner.
