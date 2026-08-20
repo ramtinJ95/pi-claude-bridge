@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildDelegationQueryOptions } from "../src/delegation-options.js";
 import { resolveDelegationPolicy } from "../src/query-policy.js";
 
@@ -51,6 +52,29 @@ describe("delegation query options", () => {
 		assert.equal(options.debug, true);
 		assert.equal(options.stderr, stderr);
 		assert.equal(options.systemPrompt.append, "skills");
+	});
+
+	it("never resumes a session for an isolated call", () => {
+		assert.equal("resume" in build().options, false);
+		assert.equal("resume" in build({ isolated: false }).options, false);
+		assert.equal(build({ isolated: false, resumeSessionId: null }).options.resume, undefined);
+	});
+
+	// The isolated/resume conflict is a type error rather than a runtime check, so
+	// this pins the shape the caller relies on: .mjs tests are not typechecked and
+	// cannot observe the invariant themselves.
+	it("makes an isolated resume unrepresentable rather than defended against", () => {
+		const options = readFileSync(new URL("../src/delegation-options.ts", import.meta.url), "utf8");
+		assert.match(options, /\{\s*isolated:\s*true;\s*resumeSessionId\?:\s*never\s*\}/,
+			"an isolated input can still carry a resume session id");
+		assert.match(options, /\{\s*isolated:\s*false;\s*resumeSessionId\?:\s*string\s*\|\s*null\s*\}/,
+			"a shared input cannot carry a resume session id");
+
+		const index = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+		assert.match(index, /buildDelegationQueryOptions\(isolated\s*\n?\s*\?\s*\{[^}]*isolated:\s*true\s*\}/,
+			"the delegation caller does not branch on isolation");
+		assert.doesNotMatch(index, /buildDelegationQueryOptions\([^;]*\bas\b[^;]*\)/,
+			"the delegation caller casts the isolation invariant away");
 	});
 
 	it("only acknowledges dangerous bypass when explicitly configured", () => {

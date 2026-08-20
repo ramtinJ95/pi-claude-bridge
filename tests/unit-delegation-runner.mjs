@@ -103,6 +103,109 @@ describe("delegation runner", () => {
 		assert.ok(hooks.closes >= 1);
 	});
 
+	it("closes the query when interrupt rejects and still reports cancellation", async () => {
+		const controller = new AbortController();
+		const hooks = { interrupts: 0, closes: 0 };
+		const query = {
+			async *[Symbol.asyncIterator]() {
+				yield init;
+				// Give the rejected interrupt's handler its turns on the microtask queue.
+				for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+				yield success;
+			},
+			async interrupt() { hooks.interrupts++; throw new Error("interrupt failed"); },
+			close() { hooks.closes++; },
+		};
+
+		const result = await runDelegation({
+			prompt: "question",
+			options: {},
+			requestedPermissionMode: "auto",
+			signal: controller.signal,
+			queryFactory: () => query,
+			onSnapshot: (snapshot) => { if (snapshot.sessionId) controller.abort(); },
+		});
+
+		assert.equal(hooks.interrupts, 1);
+		// One close from the failed interrupt's fallback, one from the runner's finally.
+		assert.equal(hooks.closes, 2);
+		assert.equal(result.stopReason, "cancelled");
+		assert.equal(result.snapshot.status, "cancelled");
+	});
+
+	it("fails when the iterator ends without an authoritative result", async () => {
+		const snapshots = [];
+
+		await assert.rejects(
+			runDelegation({
+				prompt: "question",
+				options: {},
+				requestedPermissionMode: "auto",
+				queryFactory: () => fakeQuery([init]),
+				onSnapshot: (snapshot) => snapshots.push(snapshot),
+			}),
+			/ended without a result$/,
+		);
+		assert.equal(snapshots.at(-1).status, "failed");
+		assert.equal(snapshots.at(-1).error, "Claude Code ended without a result");
+	});
+
+	it("fails on an empty stream instead of reporting an empty success", async () => {
+		await assert.rejects(
+			runDelegation({
+				prompt: "question",
+				options: {},
+				requestedPermissionMode: "auto",
+				queryFactory: () => fakeQuery([]),
+			}),
+			/ended without a result$/,
+		);
+	});
+
+	it("explains a premature end with the assistant error it already saw", async () => {
+		const assistantError = {
+			type: "assistant",
+			parent_tool_use_id: null,
+			error: "rate_limit",
+			message: { role: "assistant", content: [{ type: "text", text: "partial" }] },
+		};
+		const snapshots = [];
+
+		await assert.rejects(
+			runDelegation({
+				prompt: "question",
+				options: {},
+				requestedPermissionMode: "auto",
+				queryFactory: () => fakeQuery([init, assistantError]),
+				onSnapshot: (snapshot) => snapshots.push(snapshot),
+			}),
+			/assistant error: rate_limit/,
+		);
+		assert.equal(snapshots.at(-1).status, "failed");
+		assert.equal(snapshots.at(-1).assistantError, "rate_limit");
+	});
+
+	it("keeps an assistant error out of the way when an authoritative result follows", async () => {
+		const assistantError = {
+			type: "assistant",
+			parent_tool_use_id: null,
+			error: "server_error",
+			message: { role: "assistant", content: [] },
+		};
+
+		const result = await runDelegation({
+			prompt: "question",
+			options: {},
+			requestedPermissionMode: "auto",
+			queryFactory: () => fakeQuery([init, assistantError, success]),
+		});
+
+		assert.equal(result.stopReason, "stop");
+		assert.equal(result.snapshot.status, "succeeded");
+		assert.equal(result.snapshot.assistantError, "server_error");
+		assert.equal(result.responseText, "ANSWER");
+	});
+
 	it("resolves as cancelled when the SDK iterator throws after interrupt", async () => {
 		const controller = new AbortController();
 		const hooks = {};

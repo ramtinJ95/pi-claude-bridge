@@ -5,7 +5,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { DelegationPolicy } from "./query-policy.js";
 
-export interface DelegationQueryOptionsInput {
+interface DelegationQueryOptionsCommon {
 	policy: DelegationPolicy;
 	cwd: string;
 	env: Options["env"];
@@ -13,11 +13,15 @@ export interface DelegationQueryOptionsInput {
 	cliModel: string;
 	effort?: EffortLevel;
 	systemPromptAppend?: string;
-	resumeSessionId?: string | null;
-	isolated: boolean;
 	pathToClaudeCodeExecutable?: string;
 	debugOptions?: Pick<Options, "debug" | "debugFile" | "stderr">;
 }
+
+type DelegationSessionOptions =
+	| { isolated: true; resumeSessionId?: never }
+	| { isolated: false; resumeSessionId?: string | null };
+
+export type DelegationQueryOptionsInput = DelegationQueryOptionsCommon & DelegationSessionOptions;
 
 export interface ResolvedDelegationQueryOptions {
 	options: Options;
@@ -51,12 +55,22 @@ export function buildDelegationQueryOptions(
 				? { allowDangerouslySkipPermissions: true }
 				: {}),
 			settings: input.settings,
+			// Suppress Claude Code's own skill listing: a system-reminder naming every
+			// skill under the user's ~/.claude estate. The provider path gets this for
+			// free — `tools: []` removes the Skill tool and the listing with it — but
+			// delegation runs on Claude Code's native tools, so it has to ask. Pi-side
+			// skills arrive only through the system-prompt append below, which is meant
+			// to be the only channel.
 			skills: [],
 			tools: policy.tools,
 			...(policy.disallowedTools
 				? { disallowedTools: policy.disallowedTools }
 				: {}),
 			...(input.effort ? { effort: input.effort } : {}),
+			// Preset unconditionally: omitting it leaves the child on the SDK's bare
+			// default, without the tool and permission guidance the bridge relies on
+			// everywhere else. Whether Pi has skills to append is unrelated to whether
+			// the child needs that guidance.
 			systemPrompt: {
 				type: "preset",
 				preset: "claude_code",

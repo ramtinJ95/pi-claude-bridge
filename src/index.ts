@@ -762,6 +762,8 @@ export const __test = {
 	buildMcpServers,
 	branchSummaryOutcome,
 	PROVIDER_HOOK_SUPPORT,
+	finalizeAskClaudeResult,
+	askClaudeResultIsError,
 };
 
 // --- Provider helpers: tool name mapping ---
@@ -787,6 +789,86 @@ function updateAskClaudeToolCalls(
 			rawInput: tool.input,
 		});
 	}
+}
+
+interface AskClaudeResultDetails {
+	prompt?: string;
+	executionTime?: number;
+	actions?: string;
+	error?: boolean;
+	cancelled?: boolean;
+	permission?: PermissionObservation;
+	permissionDenials?: DelegationPermissionDenial[];
+	managedPolicy?: ManagedPolicySummary;
+}
+
+/**
+ * Promote AskClaude's own failure flag to pi's `toolResult.isError`.
+ *
+ * pi's AgentToolResult carries no isError field: a tool can only mark failure by
+ * throwing, and a throw replaces the result with a bare message, discarding the
+ * details the renderer needs and the partial answer a cancelled run collected.
+ * AskClaude records failure in its details instead, and the `tool_result` hook
+ * feeds this decision back so the model sees an error result.
+ */
+function askClaudeResultIsError(
+	event: { toolName: string; isError: boolean; details?: unknown },
+): { isError: true } | undefined {
+	if (event.toolName !== askClaudeToolName || event.isError) return undefined;
+	return (event.details as AskClaudeResultDetails | undefined)?.error ? { isError: true } : undefined;
+}
+
+/**
+ * Shape one finished delegation into the model-facing result and TUI details.
+ *
+ * A cancelled run resolves normally in the runner so partial work survives, so
+ * this is the only place that can stop it reading as a successful empty answer:
+ * the model is told it was cancelled, whatever response and actions did arrive
+ * are kept, and the `cancelled`/`error` details keep the renderer — and
+ * `askClaudeResultIsError` — from claiming success.
+ */
+function finalizeAskClaudeResult(input: {
+	result: DelegationRunResult;
+	prompt: string;
+	actions: string;
+	executionTime: number;
+}): { content: { type: "text"; text: string }[]; details: AskClaudeResultDetails } {
+	const { result, actions } = input;
+	const cancelled = result.stopReason === "cancelled";
+	const segments: string[] = [];
+
+	if (cancelled) {
+		segments.push(result.responseText
+			? `Cancelled by user. Partial response before cancellation:\n\n${result.responseText}`
+			: "Cancelled by user before Claude Code produced a response.");
+	} else if (result.responseText) {
+		segments.push(result.responseText);
+	}
+	if (actions) segments.push(`[Claude Code actions: ${actions}]`);
+	if (result.permission?.overridden) {
+		const policyLabels = managedPolicyLabels(result.managedPolicy);
+		segments.push(`[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`);
+	}
+	if (result.permissionDenials.length) {
+		const denied = result.permissionDenials
+			.slice(0, 5)
+			.map((item) => `${item.toolName}${item.reasonType ? ` (${item.reasonType})` : ""}`)
+			.join(", ");
+		segments.push(`[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`);
+	}
+
+	return {
+		content: [{ type: "text" as const, text: segments.join("\n\n") }],
+		details: {
+			prompt: input.prompt,
+			executionTime: input.executionTime,
+			actions,
+			...(cancelled ? { cancelled: true, error: true } : {}),
+			permission: result.permission,
+			permissionDenials: result.permissionDenials,
+			managedPolicy: result.managedPolicy,
+		},
+	};
 }
 
 // Provider path: the query runs with `tools: []`, so the only tools CC can
@@ -1831,12 +1913,14 @@ async function runAskClaudeDelegation(
 	const modelId = model?.id ?? requestedModel;
 	const cliModel = model ? claudeCodeModelId(model, longContextSettings) : modelId;
 
+	const isolated = options?.isolated ?? true;
+
 	// Session resume for shared mode — reuse provider's session if it exists,
 	// otherwise create one from pi's context.
 	// Note: doesn't update sharedSession.cursor after completion, so the next
 	// provider call will see missed messages and trigger a Case 4 rebuild.
 	let resumeSessionId: string | null = null;
-	if (!options?.isolated && options?.context?.length) {
+	if (!isolated && options?.context?.length) {
 		if (sharedSession) {
 			// Provider already has a session — just resume from it
 			// Any missed messages from other providers were already handled by the provider's Case 4
@@ -1871,7 +1955,7 @@ async function runAskClaudeDelegation(
 	const effort = options?.thinking && options.thinking !== "off"
 		? REASONING_TO_EFFORT[options.thinking] : undefined;
 
-	const resolved = buildDelegationQueryOptions({
+	const queryInputs = {
 		policy: delegationPolicy,
 		cwd,
 		env: { ...process.env, ...CC_CHILD_ENV },
@@ -1879,15 +1963,18 @@ async function runAskClaudeDelegation(
 		cliModel,
 		effort,
 		systemPromptAppend: skillsBlock,
-		resumeSessionId,
-		isolated: options?.isolated ?? true,
 		pathToClaudeCodeExecutable: providerSettings.pathToClaudeCodeExecutable,
 		debugOptions: makeCliDebugOptions("askclaude"),
-	});
+	};
+	// Isolation and resume are mutually exclusive by type: an isolated call has no
+	// session to resume, so the branch is made here rather than defended for later.
+	const resolved = buildDelegationQueryOptions(isolated
+		? { ...queryInputs, isolated: true }
+		: { ...queryInputs, isolated: false, resumeSessionId });
 
 	debug("askClaude:",
 		`mode=${mode} model=${modelId} cliModel=${cliModel} effort=${effort ?? "default"}`,
-		`permission=${resolved.policy.requestedPermissionMode} isolated=${options?.isolated ?? true} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
+		`permission=${resolved.policy.requestedPermissionMode} isolated=${isolated} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
 		`skills=${Boolean(skillsBlock)} promptLen=${prompt.length}`);
 
 	const result = await runDelegation({
@@ -2103,6 +2190,8 @@ export default function (pi: ExtensionAPI) {
 	askClaudeToolName = askConf?.name ?? "AskClaude";
 
 	if (askConf?.enabled) {
+		pi.on("tool_result", (event) => askClaudeResultIsError(event));
+
 		const askClaudeParams = Type.Object({
 			prompt: Type.String({ description: askContract.promptDescription }),
 			mode: Type.Optional(StringEnum(modeValues, { description: askContract.modeDescription })),
@@ -2134,20 +2223,14 @@ export default function (pi: ExtensionAPI) {
 					return new Text(theme.fg("mdLink", "◉ Claude Code ") + theme.fg("muted", status), 0, 0);
 				}
 
-				const details = result.details as {
-					prompt?: string;
-					executionTime?: number;
-					actions?: string;
-					error?: boolean;
-					permission?: PermissionObservation;
-					permissionDenials?: DelegationPermissionDenial[];
-					managedPolicy?: ManagedPolicySummary;
-				} | undefined;
+				const details = result.details as AskClaudeResultDetails | undefined;
 				const body = result.content[0]?.type === "text" ? result.content[0].text : "";
 
-				let text = details?.error
-					? theme.fg("error", "✗ Claude Code error")
-					: theme.fg("mdLink", "✓ Claude Code");
+				let text = details?.cancelled
+					? theme.fg("warning", "⊘ Claude Code cancelled")
+					: details?.error
+						? theme.fg("error", "✗ Claude Code error")
+						: theme.fg("mdLink", "✓ Claude Code");
 
 				if (details?.executionTime) text += ` ${theme.fg("dim", `${(details.executionTime / 1000).toFixed(1)}s`)}`;
 				if (details?.actions) text += ` ${theme.fg("muted", details.actions)}`;
@@ -2218,34 +2301,12 @@ export default function (pi: ExtensionAPI) {
 					});
 					clearInterval(progressInterval);
 					onUpdate?.({ content: [{ type: "text", text: "" }], details: {} });
-					const executionTime = Date.now() - start;
-					const actions = buildActionSummary(toolCalls);
-
-					let text = actions
-						? `${result.responseText}\n\n[Claude Code actions: ${actions}]`
-						: result.responseText;
-					if (result.permission?.overridden) {
-						const policyLabels = managedPolicyLabels(result.managedPolicy);
-						text += `\n\n[Claude Code permission mode: requested ${result.permission.requested}, runtime ${result.permission.effective}${policyLabels.length ? `; observed managed policy: ${policyLabels.join(", ")}` : "; Claude settings or managed policy may have overridden it"}.]`;
-					}
-					if (result.permissionDenials.length) {
-						const denied = result.permissionDenials
-							.slice(0, 5)
-							.map((item) => `${item.toolName}${item.reasonType ? ` (${item.reasonType})` : ""}`)
-							.join(", ");
-						text += `\n\n[Claude Code permission denials: ${denied}${result.permissionDenials.length > 5 ? ", …" : ""}.]`;
-					}
-					return {
-						content: [{ type: "text" as const, text }],
-						details: {
-							prompt: params.prompt,
-							executionTime,
-							actions,
-							permission: result.permission,
-							permissionDenials: result.permissionDenials,
-							managedPolicy: result.managedPolicy,
-						},
-					};
+					return finalizeAskClaudeResult({
+						result,
+						prompt: params.prompt,
+						actions: buildActionSummary(toolCalls),
+						executionTime: Date.now() - start,
+					});
 				} catch (err) {
 					clearInterval(progressInterval);
 					debug(`askClaude error: mode=${mode}, model=${params.model ?? "default"}, isolated=${isolated}, elapsed=${((Date.now() - start) / 1000).toFixed(1)}s, error=`, err);

@@ -7,6 +7,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
 	createDelegationSnapshot,
+	missingResultErrorText,
 	reduceDelegationMessage,
 	sdkResultErrorText,
 	type DelegationPermissionDenial,
@@ -62,11 +63,15 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 	let managedPolicy: ManagedPolicySummary | undefined;
 	let messageCount = 0;
 	let wasAborted = false;
+	let sawResult = false;
 	let sdkQuery: DelegationQuery | undefined;
 
 	const publish = () => input.onSnapshot?.(snapshot);
 	const onAbort = () => {
 		wasAborted = true;
+		// interrupt() asks Claude Code to stop cooperatively. If that request itself
+		// fails there is nothing left to negotiate with, so close the transport and
+		// let the loop below report cancellation.
 		void sdkQuery?.interrupt().catch(() => {
 			try { sdkQuery?.close(); } catch {}
 		});
@@ -104,6 +109,11 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 				);
 			}
 
+			if (message.type === "result") sawResult = true;
+			// Claude Code reports API failures (capacity, overload, prompt-too-long)
+			// with `is_error` on an otherwise success-shaped result. Publish the
+			// terminal snapshot first, then throw so callers render an error result
+			// instead of returning the failure text as Claude's answer.
 			const failure = message.type === "result" ? sdkResultErrorText(message) : undefined;
 			if (failure) {
 				snapshot = { ...snapshot, status: "failed", error: failure, updatedAt: now() };
@@ -114,15 +124,31 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 		}
 
 		if (wasAborted) {
+			// Cancellation resolves rather than throws: the caller still owns the
+			// partial answer and tool activity collected before the interrupt.
 			snapshot = { ...snapshot, status: "cancelled", updatedAt: now() };
-		} else {
-			snapshot = { ...snapshot, status: "succeeded", updatedAt: now() };
+			publish();
+			return completedResult("cancelled");
 		}
-		publish();
 
-		return completedResult(wasAborted ? "cancelled" : "stop");
+		if (!sawResult) {
+			// No authoritative result and no abort: the stream ended early. Succeeding
+			// here would hand Pi whatever text happened to arrive first as a complete
+			// answer.
+			const failure = missingResultErrorText(snapshot.assistantError);
+			snapshot = { ...snapshot, status: "failed", error: failure, updatedAt: now() };
+			publish();
+			throw new Error(failure);
+		}
+
+		snapshot = { ...snapshot, status: "succeeded", updatedAt: now() };
+		publish();
+		return completedResult("stop");
 	} catch (error) {
 		if (wasAborted) {
+			// An interrupt makes the SDK iterator throw ("aborted by user"). That is
+			// the cancellation path, not a delegation failure, so the error text is
+			// dropped and the state matches a clean break out of the loop.
 			snapshot = {
 				...snapshot,
 				status: "cancelled",
@@ -132,10 +158,12 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 			publish();
 			return completedResult("cancelled");
 		}
+		// A result-shaped or missing-result failure already published its terminal
+		// snapshot above; only an unexpected throw still needs one.
 		if (snapshot.status === "running") {
 			snapshot = {
 				...snapshot,
-				status: wasAborted ? "cancelled" : "failed",
+				status: "failed",
 				error: error instanceof Error ? error.message : String(error),
 				updatedAt: now(),
 			};
