@@ -107,6 +107,18 @@ describe("normalized delegation events", () => {
 		assert.equal(snapshot.responseText, "");
 	});
 
+	it("keeps the authoritative final result separate from earlier streamed narration", () => {
+		let snapshot = createDelegationSnapshot(0);
+		snapshot = reduceDelegationEvent(snapshot, { type: "text_delta", at: 1, text: "I will inspect the files first." });
+		snapshot = reduceDelegationEvent(snapshot, {
+			type: "result", at: 2, subtype: "success", stopReason: "end_turn", resultText: "FINAL ANSWER",
+		});
+
+		assert.equal(snapshot.responseText, "I will inspect the files first.");
+		assert.equal(snapshot.resultText, "FINAL ANSWER");
+		assert.equal(snapshot.resultOmittedChars, 0);
+	});
+
 	it("keeps every parallel tool result matched to its own call", () => {
 		const snapshot = replay("parallel-tools");
 

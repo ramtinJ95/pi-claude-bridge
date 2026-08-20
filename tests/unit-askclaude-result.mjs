@@ -103,4 +103,14 @@ describe("AskClaude finalization", () => {
 		assert.match(content[0].text, /truncated/);
 		assert.doesNotMatch(details.snapshot.responseText, /sk-ant-/);
 	});
+
+	it("returns the authoritative final answer instead of earlier streamed narration", () => {
+		const { content, details } = finalize({
+			responseText: "I will inspect the files first.",
+			snapshot: { resultText: "FINAL ANSWER" },
+		});
+
+		assert.equal(content[0].text, "FINAL ANSWER");
+		assert.equal(details.snapshot.resultText, "FINAL ANSWER");
+	});
 });

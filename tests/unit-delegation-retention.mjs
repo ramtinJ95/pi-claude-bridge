@@ -73,6 +73,21 @@ describe("delegation retention", () => {
 		assert.equal(retained.responseOmittedChars, 0);
 	});
 
+	it("keeps an accurate omission count when a reducer-capped field needs a marker", () => {
+		const snapshot = {
+			...createDelegationSnapshot(0),
+			responseText: "x".repeat(MODEL_RESULT_MAX_CHARS),
+			responseOmittedChars: 5_000,
+		};
+		const retained = retainDelegationSnapshot(snapshot);
+		const match = retained.responseText.match(/\n\[… truncated (\d+) chars\]$/);
+
+		assert.ok(retained.responseText.length <= MODEL_RESULT_MAX_CHARS);
+		assert.ok(match);
+		const visibleChars = retained.responseText.indexOf("\n[… truncated");
+		assert.equal(Number(match[1]), 5_000 + MODEL_RESULT_MAX_CHARS - visibleChars);
+	});
+
 	it("caps retained state lists and records what was omitted", () => {
 		const snapshot = createDelegationSnapshot(0);
 		snapshot.tools = Array.from({ length: RETAINED_LIST_MAX_ITEMS + 3 }, (_, index) => ({

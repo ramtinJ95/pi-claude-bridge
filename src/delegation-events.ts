@@ -75,6 +75,8 @@ export interface DelegationSnapshot {
 	updatedAt: number;
 	responseText: string;
 	responseOmittedChars: number;
+	resultText?: string;
+	resultOmittedChars?: number;
 	thinkingText: string;
 	thinkingOmittedChars: number;
 	tools: DelegationToolCall[];
@@ -115,7 +117,7 @@ export type DelegationEvent =
 	| { type: "assistant_error"; at: number; error: SDKAssistantMessageError }
 	| { type: "permission_denial"; at: number; denial: DelegationPermissionDenial }
 	| { type: "usage"; at: number; usage: DelegationUsage }
-	| { type: "result"; at: number; subtype: string; stopReason: string | null; fallbackText?: string }
+	| { type: "result"; at: number; subtype: string; stopReason: string | null; resultText?: string }
 	| { type: "retry"; at: number; attempt: number; maxRetries: number; delayMs: number; status: number | null; error: string }
 	| { type: "rate_limit"; at: number; info: SDKRateLimitInfo }
 	| { type: "diagnostic"; at: number; kind: DelegationDiagnostic["kind"]; label: string };
@@ -256,7 +258,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 			at,
 			subtype: message.subtype,
 			stopReason: message.stop_reason,
-			fallbackText: message.subtype === "success" && !message.is_error ? message.result : undefined,
+			resultText: message.subtype === "success" && !message.is_error ? message.result : undefined,
 		});
 		return events;
 	}
@@ -482,15 +484,17 @@ export function reduceDelegationEvent(
 		case "assistant_error":
 			return { ...base, assistantError: event.error };
 		case "result": {
-			const fallback = snapshot.responseText
+			const authoritative = event.resultText === undefined
 				? undefined
-				: appendRetainedText("", event.fallbackText || "", MODEL_RESULT_MAX_CHARS);
+				: appendRetainedText("", event.resultText, MODEL_RESULT_MAX_CHARS);
 			return {
 				...base,
 				resultSubtype: event.subtype,
 				stopReason: event.stopReason,
-				responseText: snapshot.responseText || fallback?.text || "",
-				responseOmittedChars: snapshot.responseText ? snapshot.responseOmittedChars : fallback?.omittedChars ?? 0,
+				resultText: authoritative?.text,
+				resultOmittedChars: authoritative?.omittedChars,
+				responseText: snapshot.responseText || authoritative?.text || "",
+				responseOmittedChars: snapshot.responseText ? snapshot.responseOmittedChars : authoritative?.omittedChars ?? 0,
 			};
 		}
 		case "retry":

@@ -808,7 +808,7 @@ function finalizeAskClaudeResult(input: {
 		...result.snapshot,
 		responseText: result.snapshot.responseText ?? result.responseText,
 	} as DelegationSnapshot);
-	const responseText = snapshot.responseText;
+	const responseText = snapshot.resultText ?? snapshot.responseText;
 	const retainedActions = retainText(actions, MODEL_RESULT_MAX_CHARS);
 	const cancelled = result.stopReason === "cancelled";
 	const segments: string[] = [];

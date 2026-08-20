@@ -94,6 +94,19 @@ describe("AskClaude rich tool row", () => {
 		assert.match(rendered, /Current answer/);
 	});
 
+	it("renders terminal failure text even when an empty snapshot is present", () => {
+		const failed = details();
+		failed.snapshot = { ...createDelegationSnapshot(0), status: "failed", error: "request overloaded" };
+		failed.error = true;
+		const result = { content: [{ type: "text", text: "Error: request overloaded" }], details: failed };
+
+		const compact = renderAskClaudeResult(result, { expanded: false, isPartial: false }, theme, {}, "auto").render(120).join("\n");
+		const expanded = renderAskClaudeResult(result, { expanded: true, isPartial: false }, theme, {}, "auto").render(120).join("\n");
+
+		assert.match(compact, /Error: request overloaded/);
+		assert.match(expanded, /Error: request overloaded/);
+	});
+
 	it("reuses Pi's prior stateful result component on partial updates", () => {
 		const first = renderAskClaudeResult(
 			{ content: [{ type: "text", text: "working" }], details: details() },

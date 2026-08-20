@@ -16,7 +16,7 @@ import {
 	THINKING_MAX_CHARS,
 	redactSensitiveText,
 	retainText,
-	withTruncationNotice,
+	retainTextWithOmissions,
 } from "./delegation-retention.js";
 import { managedPolicyLabels, type ManagedPolicySummary, type PermissionObservation } from "./query-policy.js";
 
@@ -68,15 +68,13 @@ export function retainDelegationSnapshot(snapshot: DelegationSnapshot): Delegati
 		diagnosticsOmitted: (snapshot.diagnosticsOmitted ?? 0) + diagnosticsOmitted,
 		timeline,
 		timelineOmitted: snapshot.timelineOmitted ?? 0,
-		responseText: retainText(
-			withTruncationNotice(snapshot.responseText ?? "", snapshot.responseOmittedChars ?? 0),
-			MODEL_RESULT_MAX_CHARS,
-		),
+		responseText: retainTextWithOmissions(snapshot.responseText ?? "", MODEL_RESULT_MAX_CHARS, snapshot.responseOmittedChars ?? 0),
 		responseOmittedChars: 0,
-		thinkingText: retainText(
-			withTruncationNotice(snapshot.thinkingText ?? "", snapshot.thinkingOmittedChars ?? 0),
-			THINKING_MAX_CHARS,
-		),
+		resultText: snapshot.resultText === undefined
+			? undefined
+			: retainTextWithOmissions(snapshot.resultText, MODEL_RESULT_MAX_CHARS, snapshot.resultOmittedChars ?? 0),
+		resultOmittedChars: 0,
+		thinkingText: retainTextWithOmissions(snapshot.thinkingText ?? "", THINKING_MAX_CHARS, snapshot.thinkingOmittedChars ?? 0),
 		thinkingOmittedChars: 0,
 		error: snapshot.error ? retainText(snapshot.error, MODEL_RESULT_MAX_CHARS) : undefined,
 		retry: snapshot.retry ? { ...snapshot.retry, error: retainText(snapshot.retry.error, MODEL_RESULT_MAX_CHARS) } : undefined,
@@ -265,8 +263,10 @@ export function renderAskClaudeResult(
 ): Component {
 	const details = result.details as AskClaudeResultDetails | undefined;
 	const snapshot = details?.snapshot;
-	const body = snapshot?.responseText
-		?? (result.content[0]?.type === "text" ? result.content[0].text ?? "" : "");
+	const contentText = result.content[0]?.type === "text" ? result.content[0].text ?? "" : "";
+	const body = snapshot?.resultText ?? snapshot?.responseText ?? contentText;
+	const failed = !details?.cancelled && (details?.error || snapshot?.status === "failed");
+	const failureText = failed ? snapshot?.error ?? contentText : "";
 	const container = context.lastComponent instanceof Container ? context.lastComponent : new Container();
 	container.clear();
 
@@ -287,6 +287,7 @@ export function renderAskClaudeResult(
 	container.addChild(new Text(header, 0, 0));
 
 	if (!options.expanded) {
+		if (failureText) container.addChild(new Text(theme.fg("error", failureText.startsWith("Error:") ? failureText : `Error: ${failureText}`), 0, 0));
 		const actions = details?.actions || (snapshot ? buildSnapshotActionSummary(snapshot) : "");
 		if (actions) container.addChild(new Text(theme.fg("muted", actions), 0, 0));
 		const preview = body.split("\n").slice(-3).join("\n");
@@ -322,6 +323,7 @@ export function renderAskClaudeResult(
 	}
 	if (snapshot?.rateLimit) container.addChild(new Text(theme.fg("warning", `Rate limit: ${snapshot.rateLimit.status}`), 0, 0));
 	if (snapshot?.retry) container.addChild(new Text(theme.fg("warning", `Retry ${snapshot.retry.attempt}/${snapshot.retry.maxRetries}: ${snapshot.retry.error}`), 0, 0));
+	if (failureText) container.addChild(new Text(theme.fg("error", failureText.startsWith("Error:") ? failureText : `Error: ${failureText}`), 0, 0));
 
 	if (details?.prompt) addSection(container, theme.fg("muted", "── Prompt ──"), details.prompt);
 	if (snapshot?.thinkingText) addSection(container, theme.fg("muted", "── Emitted thinking summary ──"), snapshot.thinkingText);

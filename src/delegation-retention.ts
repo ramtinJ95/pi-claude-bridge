@@ -24,14 +24,36 @@ export function redactSensitiveText(text: string): string {
 }
 
 export function truncateVisible(text: string, maxChars: number): string {
-	if (text.length <= maxChars) return text;
-	const omitted = text.length - maxChars;
-	const marker = `\n[… truncated ${omitted} chars]`;
-	return text.slice(0, Math.max(0, maxChars - marker.length)) + marker;
+	return retainTextWithOmissions(text, maxChars, 0, false);
 }
 
 export function retainText(text: string, maxChars: number): string {
-	return truncateVisible(redactSensitiveText(text), maxChars);
+	return retainTextWithOmissions(text, maxChars);
+}
+
+/** Redact and fit one field plus a single accurate omission marker inside its cap. */
+export function retainTextWithOmissions(
+	text: string,
+	maxChars: number,
+	previouslyOmitted = 0,
+	redact = true,
+): string {
+	const retained = redact ? redactSensitiveText(text) : text;
+	if (retained.length <= maxChars && previouslyOmitted === 0) return retained;
+
+	let newlyOmitted = Math.max(0, retained.length - maxChars);
+	let marker = "";
+	// The marker itself consumes retained space, which increases the number of
+	// source characters omitted. Iterate until the digit width and slice agree.
+	for (let i = 0; i < 5; i++) {
+		marker = `\n[… truncated ${previouslyOmitted + newlyOmitted} chars]`;
+		const next = Math.max(0, retained.length - Math.max(0, maxChars - marker.length));
+		if (next === newlyOmitted) break;
+		newlyOmitted = next;
+	}
+	marker = `\n[… truncated ${previouslyOmitted + newlyOmitted} chars]`;
+	if (marker.length >= maxChars) return marker.slice(0, maxChars);
+	return retained.slice(0, maxChars - marker.length) + marker;
 }
 
 export function appendRetainedText(
@@ -48,10 +70,6 @@ export function appendRetainedText(
 		text: current + delta.slice(0, room),
 		omittedChars: previouslyOmitted + Math.max(0, delta.length - room),
 	};
-}
-
-export function withTruncationNotice(text: string, omittedChars = 0): string {
-	return omittedChars > 0 ? `${text}\n[… truncated ${omittedChars} chars]` : text;
 }
 
 function redactValue(value: unknown, key = "", seen = new WeakSet<object>()): unknown {
