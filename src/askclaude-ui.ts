@@ -2,9 +2,12 @@
 //
 // While Claude Code runs inside an AskClaude call, Pi has one stateful tool row
 // for the whole delegation. Compact rendering summarizes it; expanded rendering
-// exposes the retained response, thinking summaries, nested tools, timeline,
-// usage, session and permission state. The provider path still exposes tools
-// directly through Pi and does not use this renderer.
+// adds the retained response, thinking summaries, a grouped action/status
+// summary, usage, session and permission state. Per-tool inputs/outputs,
+// durations, nesting, and the retained timeline are deep-inspection surfaces
+// owned exclusively by the /askclaude-details overlay (askclaude-overlay.ts).
+// The provider path still exposes tools directly through Pi and does not use
+// this renderer.
 
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
@@ -36,7 +39,7 @@ export interface AskClaudeResultDetails {
 	snapshot?: DelegationSnapshot;
 }
 
-interface RenderTheme {
+export interface RenderTheme {
 	fg(color: string, text: string): string;
 	bold(text: string): string;
 }
@@ -175,6 +178,25 @@ export function buildSnapshotActionSummary(snapshot: DelegationSnapshot): string
 	return retainActionSummary(buildActionSummary(calls));
 }
 
+/**
+ * One aggregate status line for the expanded inline row. The total counts every
+ * tool the snapshot represents (retained plus omitted); status counts cover
+ * only the retained tools, so an omission note explains any shortfall instead
+ * of claiming a status for calls whose details were discarded.
+ */
+export function buildToolAggregateLine(snapshot: DelegationSnapshot): string {
+	const counts = { running: 0, succeeded: 0, failed: 0, denied: 0 };
+	for (const tool of snapshot.tools) counts[tool.status]++;
+	const omitted = snapshot.toolsOmitted ?? 0;
+	const total = snapshot.tools.length + omitted;
+	const breakdown = (["running", "succeeded", "failed", "denied"] as const)
+		.filter((status) => counts[status] > 0)
+		.map((status) => `${counts[status]} ${status}`)
+		.join(" · ");
+	const omittedNote = omitted ? ` (details of ${omitted} earlier no longer retained)` : "";
+	return `${total} tool${total === 1 ? "" : "s"}${omittedNote}${breakdown ? `: ${breakdown}` : ""}`;
+}
+
 export function buildAskClaudePartialUpdate(
 	snapshot: DelegationSnapshot,
 	input: {
@@ -204,25 +226,13 @@ export function buildAskClaudePartialUpdate(
 	};
 }
 
-function toolDepth(tool: DelegationToolCall, byId: Map<string, DelegationToolCall>): number {
-	let depth = 0;
-	let parent = tool.parentToolUseId;
-	const visited = new Set<string>();
-	while (parent && byId.has(parent) && !visited.has(parent) && depth < 8) {
-		visited.add(parent);
-		depth++;
-		parent = byId.get(parent)?.parentToolUseId ?? null;
-	}
-	return depth;
-}
-
-function formatDuration(tool: DelegationToolCall): string {
+export function formatToolDuration(tool: DelegationToolCall): string {
 	const ms = tool.durationMs ?? (tool.elapsedSeconds == null ? undefined : tool.elapsedSeconds * 1000);
 	if (ms == null) return "";
 	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function toolStatusIcon(tool: DelegationToolCall, theme: RenderTheme): string {
+export function toolStatusIcon(tool: DelegationToolCall, theme: RenderTheme): string {
 	switch (tool.status) {
 		case "succeeded": return theme.fg("success", "✓");
 		case "failed": return theme.fg("error", "✗");
@@ -231,7 +241,7 @@ function toolStatusIcon(tool: DelegationToolCall, theme: RenderTheme): string {
 	}
 }
 
-function valueMarkdown(value: unknown): string {
+export function valueMarkdown(value: unknown): string {
 	if (typeof value === "string") return value;
 	try { return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``; }
 	catch { return String(value); }
@@ -329,28 +339,13 @@ export function renderAskClaudeResult(
 	if (details?.prompt) addSection(container, theme.fg("muted", "── Prompt ──"), details.prompt);
 	if (snapshot?.thinkingText) addSection(container, theme.fg("muted", "── Emitted thinking summary ──"), snapshot.thinkingText);
 
-	if (snapshot?.tools.length) {
+	if (snapshot && (snapshot.tools.length || snapshot.toolsOmitted)) {
 		container.addChild(new Spacer(1));
-		const omitted = snapshot.toolsOmitted ? ` (${snapshot.toolsOmitted} earlier omitted)` : "";
-		container.addChild(new Text(theme.fg("muted", `── Tools${omitted} ──`), 0, 0));
-		const byId = new Map(snapshot.tools.map((tool) => [tool.id, tool]));
-		for (const tool of snapshot.tools) {
-			const indent = "  ".repeat(toolDepth(tool, byId));
-			const duration = formatDuration(tool);
-			container.addChild(new Text(`${indent}${toolStatusIcon(tool, theme)} ${theme.bold(tool.name)}${duration ? ` ${theme.fg("dim", duration)}` : ""}`, 0, 0));
-			if (tool.input !== undefined) container.addChild(new Markdown(`${indent}**Input**\n\n${valueMarkdown(tool.input)}`, 0, 0, getMarkdownTheme()));
-			if (tool.output) container.addChild(new Markdown(`${indent}**Output**\n\n${tool.output}`, 0, 0, getMarkdownTheme()));
-			else if (tool.error) container.addChild(new Text(`${indent}${theme.fg("error", tool.error)}`, 0, 0));
-		}
-	}
-
-	if (snapshot?.timeline.length) {
-		const omitted = snapshot.timelineOmitted ? ` (${snapshot.timelineOmitted} earlier omitted)` : "";
-		const timeline = snapshot.timeline.map((entry) => {
-			const elapsed = Math.max(0, entry.at - snapshot.startedAt) / 1000;
-			return `- \`${elapsed.toFixed(1)}s\` **${entry.kind}** — ${entry.label}`;
-		}).join("\n");
-		addSection(container, theme.fg("muted", `── Timeline${omitted} ──`), timeline);
+		container.addChild(new Text(theme.fg("muted", "── Actions ──"), 0, 0));
+		const actions = details?.actions || buildSnapshotActionSummary(snapshot);
+		if (actions) container.addChild(new Text(theme.fg("muted", actions), 0, 0));
+		container.addChild(new Text(theme.fg("dim", buildToolAggregateLine(snapshot)), 0, 0));
+		container.addChild(new Text(theme.fg("dim", "Per-tool inputs/outputs, durations, and timeline: /askclaude-details (ctrl+n)"), 0, 0));
 	}
 	if (body) addSection(container, theme.fg("muted", "── Response ──"), body);
 	if (snapshot?.diagnostics.length) {

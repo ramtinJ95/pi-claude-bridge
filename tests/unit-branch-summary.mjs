@@ -24,6 +24,8 @@ function activateWithMockPi() {
 		on: (event, handler) => handlers.set(event, handler),
 		registerProvider: () => {},
 		registerTool: () => {},
+		registerCommand: () => {},
+		registerShortcut: () => {},
 	});
 	return handlers;
 }

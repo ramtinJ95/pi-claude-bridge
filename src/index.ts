@@ -26,6 +26,7 @@ import {
 import { collectCarriedAttachments, placeCarriedAttachments, type CarriedAttachment } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
 import { askClaudeContextTags, buildAskClaudeContract } from "./askclaude-contract.js";
+import { clearLiveAskClaudeCall, registerAskClaudeDetailsUI, updateLiveAskClaudeCall } from "./askclaude-overlay.js";
 import {
 	buildAskClaudePartialUpdate,
 	buildSnapshotActionSummary,
@@ -2035,6 +2036,9 @@ export default function (pi: ExtensionAPI) {
 		debug(`${event}: clearing session ${sharedSession?.sessionId?.slice(0, 8) ?? "none"}`);
 		sharedSession = null;
 		shownProviderPermissionOverrides.clear();
+		// A live AskClaude record from a previous session branch must not surface
+		// in the details overlay of the next one.
+		clearLiveAskClaudeCall();
 
 		// Clear the global streamSimple if this instance registered it.
 		// This allows /reload to work — the old instance clears the flag so
@@ -2188,6 +2192,7 @@ export default function (pi: ExtensionAPI) {
 
 	if (askConf?.enabled) {
 		pi.on("tool_result", (event) => askClaudeResultIsError(event));
+		registerAskClaudeDetailsUI(pi, { toolName: askClaudeToolName });
 
 		const askClaudeParams = Type.Object({
 			prompt: Type.String({ description: askContract.promptDescription }),
@@ -2217,7 +2222,7 @@ export default function (pi: ExtensionAPI) {
 			renderResult(result, options, theme, context) {
 				return renderAskClaudeResult(result, options, theme, context, askPermissionMode);
 			},
-			async execute(_id, params, signal, onUpdate, ctx) {
+			async execute(toolCallId, params, signal, onUpdate, ctx) {
 				// Guard: circular delegation
 				if (ctx.model?.baseUrl === "claude-bridge") {
 					debug("askClaude: blocked circular delegation (active provider is claude-bridge)");
@@ -2236,7 +2241,7 @@ export default function (pi: ExtensionAPI) {
 				let pendingPublish: ReturnType<typeof setTimeout> | undefined;
 
 				const publishSnapshot = (force = false) => {
-					if (!onUpdate || !lastSnapshot) return;
+					if (!lastSnapshot) return;
 					const now = Date.now();
 					const delay = 100 - (now - lastPublishedAt);
 					if (!force && delay > 0) {
@@ -2249,20 +2254,42 @@ export default function (pi: ExtensionAPI) {
 					if (pendingPublish) clearTimeout(pendingPublish);
 					pendingPublish = undefined;
 					lastPublishedAt = now;
-					onUpdate(buildAskClaudePartialUpdate(lastSnapshot, {
+					const update = buildAskClaudePartialUpdate(lastSnapshot, {
 						prompt: params.prompt,
 						executionTime: now - start,
 						capabilityMode: mode,
 						requestedModel,
 						thinking: params.thinking,
 						isolated,
-					}));
+					});
+					// Same bounded, retained, redacted record the tool row streams — the
+					// details overlay's live view adds no second retention path.
+					updateLiveAskClaudeCall({ toolCallId, startedAt: start, prompt: params.prompt, details: update.details });
+					onUpdate?.(update);
 				};
 				const progressInterval = setInterval(() => publishSnapshot(true), 1000);
 				const stopPublishing = () => {
 					clearInterval(progressInterval);
 					if (pendingPublish) clearTimeout(pendingPublish);
 				};
+
+				// Seed the live slot before the first snapshot so /askclaude-details and
+				// ctrl+n can show the running call immediately. The slot keeps the final
+				// details after completion until the session branch persists the result,
+				// which then shadows it; the next call replaces the slot.
+				updateLiveAskClaudeCall({
+					toolCallId,
+					startedAt: start,
+					prompt: params.prompt,
+					details: {
+						prompt: retainAskClaudePrompt(params.prompt),
+						executionTime: 0,
+						capabilityMode: mode,
+						requestedModel,
+						thinking: params.thinking,
+						isolated,
+					},
+				});
 
 				try {
 					const result = await runAskClaudeDelegation(params.prompt, mode, signal, {
@@ -2279,7 +2306,7 @@ export default function (pi: ExtensionAPI) {
 						context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
 					});
 					stopPublishing();
-					return finalizeAskClaudeResult({
+					const finalized = finalizeAskClaudeResult({
 						result,
 						prompt: params.prompt,
 						executionTime: Date.now() - start,
@@ -2288,26 +2315,30 @@ export default function (pi: ExtensionAPI) {
 						thinking: params.thinking,
 						isolated,
 					});
+					updateLiveAskClaudeCall({ toolCallId, startedAt: start, prompt: params.prompt, details: finalized.details });
+					return finalized;
 				} catch (err) {
 					stopPublishing();
 					debug(`askClaude error: mode=${mode}, model=${requestedModel}, isolated=${isolated}, elapsed=${((Date.now() - start) / 1000).toFixed(1)}s, error=`, err);
 					// Summarize the retained snapshot, not the raw one: the failure path
 					// persists and displays the same bounded, redacted record as success.
 					const retainedSnapshot = lastSnapshot ? retainDelegationSnapshot(lastSnapshot) : undefined;
+					const errorDetails: AskClaudeResultDetails = {
+						prompt: retainAskClaudePrompt(params.prompt),
+						executionTime: Date.now() - start,
+						actions: retainedSnapshot ? buildSnapshotActionSummary(retainedSnapshot) : undefined,
+						capabilityMode: mode,
+						requestedModel,
+						thinking: params.thinking,
+						isolated,
+						error: true,
+						permissionDenials: retainedSnapshot?.permissionDenials,
+						snapshot: retainedSnapshot,
+					};
+					updateLiveAskClaudeCall({ toolCallId, startedAt: start, prompt: params.prompt, details: errorDetails });
 					return {
 						content: [{ type: "text" as const, text: assembleModelResult({ answer: `Error: ${errorMessage(err)}` }) }],
-						details: {
-							prompt: retainAskClaudePrompt(params.prompt),
-							executionTime: Date.now() - start,
-							actions: retainedSnapshot ? buildSnapshotActionSummary(retainedSnapshot) : undefined,
-							capabilityMode: mode,
-							requestedModel,
-							thinking: params.thinking,
-							isolated,
-							error: true,
-							permissionDenials: retainedSnapshot?.permissionDenials,
-							snapshot: retainedSnapshot,
-						},
+						details: errorDetails,
 					};
 				}
 			},

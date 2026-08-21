@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createDelegationSnapshot } from "../src/delegation-events.js";
-import { buildAskClaudePartialUpdate, renderAskClaudeResult } from "../src/askclaude-ui.js";
+import { buildAskClaudePartialUpdate, buildToolAggregateLine, renderAskClaudeResult } from "../src/askclaude-ui.js";
 
 initTheme("dark", false);
 
@@ -74,7 +74,7 @@ describe("AskClaude rich tool row", () => {
 		assert.match(rendered, /Current \*\*answer\*\*/);
 	});
 
-	it("renders expanded metadata, thinking, nested tools, timeline, usage, and Markdown response", () => {
+	it("renders expanded metadata, thinking, grouped actions, aggregate status, usage, and Markdown response", () => {
 		const context = {};
 		const component = renderAskClaudeResult(
 			{ content: [{ type: "text", text: "working" }], details: details() },
@@ -88,10 +88,40 @@ describe("AskClaude rich tool row", () => {
 		assert.match(rendered, /model=claude-opus-test/);
 		assert.match(rendered, /100 in \/ 20 out/);
 		assert.match(rendered, /Emitted thinking summary/);
-		assert.match(rendered, /Agent/);
-		assert.match(rendered, /Read 200ms/);
-		assert.match(rendered, /Timeline/);
+		// Same grouped, path-aware action semantics as the collapsed view.
+		assert.match(rendered, /Agent\(review\); Read\(src\/a\.ts\)/);
+		assert.match(rendered, /2 tools: 1 running · 1 succeeded/);
+		assert.match(rendered, /\/askclaude-details/);
 		assert.match(rendered, /Current answer/);
+	});
+
+	it("keeps per-tool inputs/outputs and the raw timeline out of the expanded inline view", () => {
+		const component = renderAskClaudeResult(
+			{ content: [{ type: "text", text: "working" }], details: details() },
+			{ expanded: true, isPartial: false },
+			theme,
+			{},
+			"auto",
+		);
+		const rendered = component.render(120).join("\n");
+
+		// Deep inspection is owned by the /askclaude-details overlay.
+		assert.doesNotMatch(rendered, /── Tools/);
+		assert.doesNotMatch(rendered, /── Timeline/);
+		assert.doesNotMatch(rendered, /Input/);
+		assert.doesNotMatch(rendered, /Output/);
+		assert.doesNotMatch(rendered, /file text/); // tool output payload
+		assert.doesNotMatch(rendered, /tool_start|tool_succeeded/);
+		assert.doesNotMatch(rendered, /200ms/); // per-tool durations
+	});
+
+	it("counts omitted retained tools in the aggregate total without claiming their status", () => {
+		const snapshot = details().snapshot;
+		snapshot.toolsOmitted = 3;
+		const line = buildToolAggregateLine(snapshot);
+
+		assert.equal(line, "5 tools (details of 3 earlier no longer retained): 1 running · 1 succeeded");
+		assert.equal(buildToolAggregateLine({ ...snapshot, tools: [], toolsOmitted: 0 }), "0 tools");
 	});
 
 	it("renders terminal failure text even when an empty snapshot is present", () => {
