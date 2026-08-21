@@ -16,7 +16,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { clearLiveAskClaudeCall, getLiveAskClaudeCall, updateLiveAskClaudeCall } from "../src/askclaude-overlay.js";
+import { clearLiveAskClaudeCall, getLiveAskClaudeCall, updateLiveAskClaudeCall } from "../src/claude-sessions-overlay.js";
 
 const { default: activate, __test } = await import("../src/index.js");
 

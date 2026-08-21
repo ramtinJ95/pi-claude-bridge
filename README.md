@@ -62,33 +62,52 @@ Thinking is emitted summary text, not private chain-of-thought. Persisted displa
 details use bounded fields, visible truncation, and best-effort credential
 redaction; the model-facing result is separately capped at about 16k characters.
 
-### Details overlay
+### Claude Sessions overlay
 
-For deep inspection beyond the inline row, `/askclaude-details` opens a centered
-overlay with the latest AskClaude call (`/askclaude-details 2` opens call #2);
-`Ctrl+N` toggles the same overlay. Calls are read from the current session
-branch, so completed calls stay inspectable after a session resume, and the
-latest call updates live while it runs.
+For deep inspection beyond the inline row, `/claude-details` opens one centered
+overlay over every Claude delegation in the session — AskClaude calls and
+background SpawnClaudeAgent jobs — as a single flat chronological list with
+clear kind/profile/status labels. `Ctrl+N` toggles the same overlay. When a
+background job is running, opening the overlay focuses it first; otherwise it
+focuses the chronologically latest record. `/claude-details 2` opens record #2
+of the merged list. AskClaude records are read from the current session
+branch's persisted tool-call/result pairs; background records come from the
+persisted `claude-background-job` completion entries merged with the in-memory
+job manager (which supplies running state and is the terminal fallback if no
+entry was persisted). Completed records stay inspectable after a session
+resume, and the running AskClaude call or background job updates live while
+the overlay is open.
+
+`/askclaude-details` remains as a compatibility alias: it opens the same
+unfiltered overlay focused on the latest AskClaude record, and
+`/askclaude-details 2` counts AskClaude calls only (preserving the command's
+original numbering) before mapping to the merged list. It is not a separately
+filtered view.
 
 Pi 0.84.2 also assigns `Ctrl+N` inside its session picker. The extension owns
 the shortcut in the main editor, so Pi may report that overlap as an extension
 shortcut warning at startup; the session picker's focused binding still works.
 
-The pinned header shows only what the Claude delegation itself reported —
-runtime model, tokens/cache/cost/turns, Claude session ID, Claude working
-directory, runtime permission mode, status, capability, isolation, and requested
-thinking level. Values the delegation did not report read `unavailable` rather
-than borrowing anything from the active Pi session. The scrollable body shows
-the full original prompt (from the persisted tool-call arguments), the emitted
-thinking summary, retained nested tools with inputs/outputs/durations/status,
-the retained timeline, and the authoritative response. Tool outputs and lists
+The pinned header shows only what the Claude delegation itself reported. For
+AskClaude records: runtime model, tokens/cache/cost/turns, Claude session ID,
+Claude working directory, runtime permission mode, status, capability,
+isolation, and requested thinking level. For background records: profile,
+status, runtime/requested model, thinking, permission and managed-policy
+state, Claude session ID and launch working directory, usage, elapsed time or
+duration, job ID, and the reviewer diff source when applicable. Values the
+delegation did not report read `unavailable` rather than borrowing anything
+from the active Pi session. The scrollable body shows the same sections for
+both kinds — the full original prompt or task, the emitted thinking summary,
+retained nested tools with inputs/outputs/durations/status, the retained
+timeline, the authoritative response, and diagnostics. Tool outputs and lists
 remain subject to the same retained limits as the inline row — truncation and
-omission notices are shown as persisted, not re-expanded.
+omission notices are shown as persisted, not re-expanded — and a malformed or
+forward-incompatible persisted job entry degrades to a visible placeholder.
 
 Keys while the overlay is focused: `↑`/`↓` or `j`/`k` scroll by line,
 `PgUp`/`PgDn` (including your configured select-page bindings) by page,
 `Home`/`End` jump, `1`-`9` jump to a section, `←`/`→` (or `p`/`n`) switch to the
-previous/next AskClaude call, and `q`, `Esc`, or `Ctrl+N` close.
+previous/next record, and `q`, `Esc`, or `Ctrl+N` close.
 
 ## SpawnClaudeAgent Tool
 
@@ -101,10 +120,11 @@ keep working: the tool returns immediately with a stable job ID (e.g.
 plus a counter, so ID collisions across extension reloads are overwhelmingly
 unlikely) instead of waiting for Claude to finish. The job runs
 through the same delegation engine as AskClaude, always in a fresh isolated
-read-only Claude session. A sticky widget tracks the running job,
-`/claude-jobs` inspects or cancels it, and the job's bounded result is
-delivered back into the conversation exactly once when it reaches a terminal
-state (see below).
+read-only Claude session. A sticky widget tracks the running job, the Claude
+Sessions overlay (`Ctrl+N`, `/claude-details`, or `/claude-jobs`) inspects it,
+`/claude-jobs cancel` cancels it, and the job's bounded result is delivered
+back into the conversation exactly once when it reaches a terminal state (see
+below).
 
 ### Parameters
 
@@ -152,14 +172,17 @@ state (see below).
 While a job runs, a compact widget above Pi's editor shows the Claude-job
 facts: job ID, profile, requested/runtime model, requested thinking, status,
 current action, elapsed time, runtime permission mode, permission-denial
-count, and usage once Claude Code reports it. It is at most three lines,
-truncated to the terminal width, and disappears on every terminal state,
-session shutdown, or session switch.
+count, and usage once Claude Code reports it, plus the `Ctrl+N` details and
+`/claude-jobs cancel` hints. It is at most three lines, truncated to the
+terminal width, and disappears on every terminal state, session shutdown, or
+session switch.
 
 Human commands (no model context consumed):
 
-- `/claude-jobs` — list this session's background jobs with status, elapsed
-  time, and model.
+- `/claude-jobs` — open the Claude Sessions overlay focused on the running
+  background job, else the latest background job; if the session has none it
+  says so. Outside the interactive TUI it prints the textual status listing
+  (job ID, status, elapsed time, and model per job) instead.
 - `/claude-jobs cancel [job-id]` — cancel the running job (the job ID is
   optional when one job is running). Unknown or already-terminal jobs are
   reported honestly instead of being "cancelled".

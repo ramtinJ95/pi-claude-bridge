@@ -361,7 +361,7 @@ adapters:
   `explorer`/`reviewer` profiles, bounded tracked-and-untracked reviewer
   artifacts, collision-resistant IDs, explicit terminal states, cancellation,
   and bounded shutdown/reset cleanup.
-- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) adds the Phase
+- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) added the Phase
   3b presentation/delivery adapter over that same manager and snapshot:
   a compact sticky live widget; `/claude-jobs` status and human cancellation;
   one restore-safe TUI-only completion entry; and one bounded model-visible
@@ -371,11 +371,53 @@ adapters:
   a replacement session. No model-callable lifecycle tools or second job-state
   system were added.
 
-Phase 3 validation is 375 passing unit tests, clean TypeScript typecheck and
+Phase 3 validation was 375 passing unit tests, clean TypeScript typecheck and
 `git diff --check`, and a package dry-run containing the new UI module. The
 Phase 3b review found and fixed two restore-path bugs: malformed/future entry
 payloads now degrade visibly rather than throwing, and persisted entries remain
 renderable if AskClaude is later disabled.
+
+### Unified Claude Sessions overlay — complete
+
+[PR #10](https://github.com/ramtinJ95/pi-claude-bridge/pull/10) unified the
+previously separate AskClaude details and background-job status surfaces. Its
+final validation is 408 passing unit tests, clean TypeScript typecheck and
+`git diff --check`, plus a package dry-run containing the replacement overlay
+and omitting the superseded AskClaude-only module.
+
+The AskClaude-only details overlay from PR #6 has been superseded by one
+unified "Claude Sessions" overlay covering both AskClaude calls and background
+jobs, reusing the same overlay component, scrolling, responsive rendering, and
+retained/redacted snapshots — no second viewer framework or retention path.
+
+- One flat chronological list across both kinds with clear kind/profile/status
+  labels; AskClaude ISO timestamps and background epoch timestamps are
+  normalized before sorting, with deterministic branch order as the fallback.
+- `Ctrl+N` toggles the overlay, focusing a running background job first
+  (pinned across live updates), else the chronologically latest record. The
+  already-shipped Pi 0.84.2 `Ctrl+N` session-picker conflict is accepted;
+  configurability is deferred.
+- `/claude-details [n]` is the canonical command with an optional 1-based
+  index into the merged list. `/askclaude-details [n]` remains as a
+  compatibility alias — the same unfiltered overlay focused on the latest
+  AskClaude record, with `n` resolved among AskClaude calls only — not a
+  separately filtered view.
+- `/claude-jobs` with no arguments opens the overlay focused on the running
+  (else latest) background job, notifies honestly when the session has none,
+  and keeps its textual status output outside the TUI; `/claude-jobs cancel`
+  is unchanged. The live widget hint mentions `Ctrl+N` details alongside the
+  cancel guidance.
+- Background records come from the persisted `claude-background-job`
+  completion entries (validated by the same guard the transcript renderer
+  uses, so malformed/future entries degrade visibly) merged with the job
+  manager's records, deduplicated by job ID: the persisted entry wins for
+  settled jobs; the manager supplies running state and is the terminal
+  fallback when persistence is absent.
+- The overlay stays behind the `askClaude.enabled` registration gate;
+  persisted completion entries remain renderable in the transcript when it is
+  disabled. One overlay owner and one close toggle; the overlay subscribes to
+  the AskClaude live slot and the manager while open and releases both on
+  dispose.
 
 ### Current handoff: runtime dogfooding
 
@@ -383,22 +425,41 @@ The implementation is complete; the next gate is real Pi runtime validation.
 This workstation loads `/Users/ramtin/personal/pi-claude-bridge` directly from
 `~/.pi/agent/settings.json`, so `/reload` loads the current worktree.
 
-1. Run real `explorer` and `reviewer` jobs from a non-claude-bridge provider.
-   Confirm immediate job-ID return, visible rejection of a second concurrent
-   spawn, and explicit invalid-base failures.
+Completed runtime evidence before the unified-overlay change:
+
+- A real `explorer` job using Opus/high ran independently for 6m58s while the
+  main Pi session remained usable. Its isolated prompt and structural read-only
+  inventory were correct, the live widget updated, and one bounded completion
+  reached the model on a later turn.
+- The run launched from Pi's process cwd (`/Users/ramtin`) rather than the
+  repository it explored (`/Users/ramtin/personal/pi-claude-bridge`). Explorer
+  could locate the repository, but a reviewer launched from that cwd would fail
+  the git-work-tree check. Decide after overlay dogfooding whether starting Pi
+  in the target repository is an acceptable contract or launch cwd needs an
+  explicit product control; do not hide the failure with cwd guessing.
+- `/claude-jobs`' old multiline notification duplicated the better live widget
+  and went stale immediately. That observation directly motivated the unified
+  overlay and its new TUI command behavior.
+
+1. Run a real `reviewer` job from a repository-root Pi session. Confirm visible
+   rejection of a second concurrent spawn and explicit invalid-base failures.
 2. Exercise the live widget in regular, fullscreen, and a small terminal. Test
-   `/claude-jobs` and `/claude-jobs cancel`, including completion and human
+   `/claude-jobs` opening the unified overlay (running job, latest settled job,
+   and empty session) and `/claude-jobs cancel`, including completion and human
    cancellation.
-3. Confirm exactly one completion reaches the model with the next prompt,
-   including when a main-agent turn is active as the job settles. Quitting Pi
-   before the next prompt is a known loss boundary for the in-memory queued
-   message; the persisted TUI entry remains.
+3. Repeat the confirmed one-completion next-turn delivery while a main-agent
+   turn is active as the job settles. Quitting Pi before the next prompt is a
+   known loss boundary for the in-memory queued message; the persisted TUI
+   entry remains.
 4. Run `/reload` during a real job and inspect for orphaned Claude Code
    processes. Resume a session containing completion entries and confirm their
    renderer restores correctly.
-5. Finish the outstanding AskClaude overlay checks: running-call open/close via
-   both `Ctrl+N` and `/askclaude-details`, small/fullscreen rendering, restored
-   calls, and whether the Pi 0.84.2 `Ctrl+N` conflict is acceptable.
+5. Finish the outstanding Claude Sessions overlay checks: running-call and
+   running-job open/close via `Ctrl+N`, `/claude-details`, and the
+   `/askclaude-details` compatibility alias; mixed AskClaude/background
+   navigation; small/fullscreen rendering; and restored records after a
+   session resume. The Pi 0.84.2 `Ctrl+N` session-picker conflict is accepted
+   as shipped.
 
 Do not begin Phase 4 by default until this dogfooding is recorded and any
 blocking runtime issue is fixed.

@@ -174,6 +174,7 @@ describe("background job live widget", () => {
 			assert.match(rendered, /model opus/);
 			assert.match(rendered, /thinking high/);
 			assert.match(rendered, /now: starting/);
+			assert.match(rendered, /Ctrl\+N details/);
 			assert.match(rendered, /\/claude-jobs cancel/);
 
 			// A manager snapshot update repaints the widget and refreshes its facts.
@@ -276,6 +277,48 @@ describe("/claude-jobs command", () => {
 		const ctx = { ui: fakeUI() };
 		await pi.commands.get("claude-jobs").handler("", ctx);
 		assert.match(ctx.ui.notifications[0].message, /No background Claude jobs in this session/);
+	});
+
+	it("opens the unified Claude Sessions overlay in the TUI when the handle is wired", async () => {
+		const openedWith = [];
+		const { pi, jobs } = await wire({ openSessionsOverlay: async (ctx) => openedWith.push(ctx) });
+		const record = jobs.spawn(spawnInput(async () => runResult()));
+		await jobs.settled(record.id);
+
+		const ctx = { mode: "tui", ui: fakeUI() };
+		await pi.commands.get("claude-jobs").handler("", ctx);
+		assert.equal(openedWith.length, 1);
+		assert.equal(openedWith[0], ctx);
+		assert.equal(ctx.ui.notifications.length, 0, "the overlay owner handles all no-args TUI output");
+	});
+
+	it("keeps the textual status output outside the TUI even when the handle is wired", async () => {
+		let overlayOpens = 0;
+		const { pi, jobs } = await wire({ openSessionsOverlay: async () => { overlayOpens++; } });
+		const record = jobs.spawn(spawnInput(async () => runResult()));
+		await jobs.settled(record.id);
+
+		const ctx = { mode: "print", ui: fakeUI() };
+		await pi.commands.get("claude-jobs").handler("", ctx);
+		assert.equal(overlayOpens, 0);
+		assert.match(ctx.ui.notifications[0].message, new RegExp(`${record.id} — explorer · succeeded after`));
+	});
+
+	it("keeps cancellation textual and unchanged when the overlay handle is wired", async () => {
+		let overlayOpens = 0;
+		const { pi, jobs } = await wire({ openSessionsOverlay: async () => { overlayOpens++; } });
+		const pending = pendingExecutor();
+		const record = jobs.spawn(spawnInput(pending.execute));
+		pending.state.signal.addEventListener("abort", () => pending.resolve(
+			runResult("cancelled", snapshotWith({ status: "cancelled" })),
+		), { once: true });
+
+		const ctx = { mode: "tui", ui: fakeUI() };
+		await pi.commands.get("claude-jobs").handler("cancel", ctx);
+		assert.equal(overlayOpens, 0);
+		assert.match(ctx.ui.notifications[0].message, new RegExp(`Cancellation requested for ${record.id}`));
+		await jobs.settled(record.id);
+		assert.equal(jobs.get(record.id).status, "cancelled");
 	});
 
 	it("lists running and settled jobs with their terminal states", async () => {

@@ -5,7 +5,7 @@
 // adds the retained response, thinking summaries, a grouped action/status
 // summary, usage, session and permission state. Per-tool inputs/outputs,
 // durations, nesting, and the retained timeline are deep-inspection surfaces
-// owned exclusively by the /askclaude-details overlay (askclaude-overlay.ts).
+// owned exclusively by the Claude Sessions overlay (claude-sessions-overlay.ts).
 // The provider path still exposes tools directly through Pi and does not use
 // this renderer.
 
@@ -310,7 +310,7 @@ export function renderAskClaudeResult(
 		const actions = details?.actions || buildSnapshotActionSummary(snapshot);
 		if (actions) container.addChild(new Text(theme.fg("muted", actions), 0, 0));
 		container.addChild(new Text(theme.fg("dim", buildToolAggregateLine(snapshot)), 0, 0));
-		container.addChild(new Text(theme.fg("dim", "Per-tool inputs/outputs, durations, and timeline: /askclaude-details (ctrl+n)"), 0, 0));
+		container.addChild(new Text(theme.fg("dim", "Per-tool inputs/outputs, durations, and timeline: /claude-details (ctrl+n)"), 0, 0));
 	}
 	if (body) addSection(container, theme.fg("muted", "── Response ──"), body);
 	if (snapshot?.diagnostics.length) {

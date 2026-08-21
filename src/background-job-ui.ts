@@ -17,7 +17,7 @@
 // or reset) are never delivered: the session they belong to is being torn down
 // and a replacement session must not receive them.
 
-import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import type { AgentProfileId } from "./agent-profiles.js";
 import type { BackgroundJobManager, BackgroundJobRecord, BackgroundJobStatus } from "./background-jobs.js";
@@ -89,11 +89,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Persisted custom-entry data is untrusted across restores and package
- * versions. Validate every field this renderer dereferences so a corrupt or
- * forward-incompatible entry degrades visibly instead of breaking transcript
- * reconstruction.
+ * versions. Validate every field this renderer and the Claude Sessions overlay
+ * (claude-sessions.ts) dereference so a corrupt or forward-incompatible entry
+ * degrades visibly instead of breaking transcript reconstruction or the
+ * overlay.
  */
-function isRenderableCompletionData(value: unknown): value is BackgroundJobCompletionData {
+export function isRenderableCompletionData(value: unknown): value is BackgroundJobCompletionData {
 	if (!isRecord(value)) return false;
 	if (typeof value.jobId !== "string"
 		|| typeof value.profile !== "string" || !AGENT_PROFILES.has(value.profile as AgentProfileId)
@@ -110,12 +111,21 @@ function isRenderableCompletionData(value: unknown): value is BackgroundJobCompl
 	if (!isRecord(value.snapshot)
 		|| typeof value.snapshot.responseText !== "string"
 		|| (value.snapshot.resultText !== undefined && typeof value.snapshot.resultText !== "string")
+		|| (value.snapshot.thinkingText !== undefined && typeof value.snapshot.thinkingText !== "string")
+		|| (value.snapshot.error !== undefined && typeof value.snapshot.error !== "string")
+		|| typeof value.snapshot.startedAt !== "number" || !Number.isFinite(value.snapshot.startedAt)
 		|| !Array.isArray(value.snapshot.tools)
 		|| !value.snapshot.tools.every((tool) => isRecord(tool)
 			&& typeof tool.id === "string"
 			&& typeof tool.name === "string"
 			&& typeof tool.status === "string"
-			&& ["running", "succeeded", "failed", "denied"].includes(tool.status))
+			&& ["running", "succeeded", "failed", "denied"].includes(tool.status)
+			&& (tool.output === undefined || typeof tool.output === "string")
+			&& (tool.error === undefined || typeof tool.error === "string"))
+		|| !Array.isArray(value.snapshot.timeline)
+		|| !value.snapshot.timeline.every((event) => isRecord(event) && typeof event.at === "number" && Number.isFinite(event.at))
+		|| !Array.isArray(value.snapshot.diagnostics)
+		|| !value.snapshot.diagnostics.every(isRecord)
 		|| !Array.isArray(value.snapshot.permissionDenials)
 		|| !value.snapshot.permissionDenials.every((denial) => isRecord(denial) && typeof denial.toolName === "string")) return false;
 	if (value.snapshot.usage !== undefined) {
@@ -175,6 +185,7 @@ export function buildBackgroundJobWidgetLines(
 		`now: ${action}`,
 		toolCount ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : undefined,
 		usageLine(snapshot),
+		"Ctrl+N details",
 		"/claude-jobs cancel to stop",
 	].filter(Boolean).join(" · ");
 	lines.push(fit(`  ${theme.fg("muted", activity)}`));
@@ -423,6 +434,13 @@ export interface BackgroundJobUIDeps {
 	jobs: Pick<BackgroundJobManager, "subscribe" | "running" | "list" | "get" | "cancel">;
 	now?: () => number;
 	onDebug?: (message: string) => void;
+	/**
+	 * Opens the unified Claude Sessions overlay focused on background jobs.
+	 * Owned by claude-sessions-overlay.ts — this module never registers a
+	 * competing overlay; outside the TUI (or without the handle) `/claude-jobs`
+	 * keeps its textual status output.
+	 */
+	openSessionsOverlay?: (ctx: ExtensionContext) => Promise<void>;
 }
 
 type BackgroundJobUIPi = Pick<
@@ -508,10 +526,17 @@ export function registerBackgroundJobUI(pi: BackgroundJobUIPi, deps: BackgroundJ
 	});
 
 	pi.registerCommand("claude-jobs", {
-		description: "List background Claude jobs; \"/claude-jobs cancel [job-id]\" cancels the running one",
+		description: "Inspect background Claude jobs; \"/claude-jobs cancel [job-id]\" cancels the running one",
 		handler: async (args, ctx) => {
 			const [verb, jobId] = args.trim().split(/\s+/).filter(Boolean);
 			if (!verb) {
+				// In the TUI this opens the unified Claude Sessions overlay focused
+				// on the running (else latest) background job; the textual status
+				// listing remains the non-TUI behavior.
+				if (ctx.mode === "tui" && deps.openSessionsOverlay) {
+					await deps.openSessionsOverlay(ctx);
+					return;
+				}
 				ctx.ui.notify(buildJobStatusLines(jobs.list(), now()).join("\n"), "info");
 				return;
 			}
