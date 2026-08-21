@@ -28,6 +28,7 @@ function activateWithMockPi() {
 		registerTool: () => {},
 		registerCommand: () => {},
 		registerShortcut: () => {},
+		registerEntryRenderer: () => {},
 	});
 	return handlers;
 }

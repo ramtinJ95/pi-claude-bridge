@@ -39,6 +39,7 @@ import { buildDelegationQueryOptions } from "./delegation-options.js";
 import { runDelegation, type DelegationRunResult } from "./delegation-runner.js";
 import { AGENT_PROFILES, AGENT_PROFILE_IDS, buildAgentJobPrompt, type AgentProfile, type AgentProfileId } from "./agent-profiles.js";
 import { BackgroundJobLimitError, BackgroundJobManager, type BackgroundJobLaunch, type BackgroundJobRecord } from "./background-jobs.js";
+import { registerBackgroundJobUI } from "./background-job-ui.js";
 import { captureReviewerDiff, type ReviewerDiffArtifact } from "./reviewer-diff.js";
 import {
 	retainDelegationSnapshot,
@@ -2089,7 +2090,7 @@ function spawnedJobResultText(record: BackgroundJobRecord): string {
 		`Started background Claude job ${record.id} (profile=${record.profile}, model=${record.requestedModel}${record.thinking ? `, thinking=${record.thinking}` : ""}).`,
 		`It runs in a fresh isolated read-only Claude session in ${record.launch.cwd} on context captured at launch${record.launch.diff ? ` (diff artifact: ${record.launch.diff.source})` : ""}.`,
 		"One background job runs per session; a second spawn fails until this one finishes.",
-		"This phase has no status, result, or cancel tools and does not deliver the job's result back to this conversation — do not wait for or poll it.",
+		"When the job reaches a terminal state its bounded result is delivered into this conversation as a message you will see on a later turn — keep working normally; there are no status, result, or cancel tools to poll.",
 	].join(" ");
 }
 
@@ -2145,7 +2146,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 	});
 
 	const spawnClaudeAgentParams = Type.Object({
-		task: Type.String({ description: "The body of work for the background agent. Include everything it needs: it runs in a fresh isolated Claude session with no Pi conversation history and its result is not delivered back in this phase." }),
+		task: Type.String({ description: "The body of work for the background agent. Include everything it needs: it runs in a fresh isolated Claude session with no Pi conversation history. Its bounded result is delivered back into this conversation as a message on a later turn." }),
 		profile: StringEnum(AGENT_PROFILE_IDS, { description: '"explorer": read-only repository/web exploration and research. "reviewer": read-only code review of a repository diff captured at launch. Both are limited to Read, Glob, Grep, WebFetch, and WebSearch.' }),
 		model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
 		thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
@@ -2154,7 +2155,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 	pi.registerTool<typeof spawnClaudeAgentParams>({
 		name: spawnClaudeAgentToolName,
 		label: "Spawn Claude Agent",
-		description: "Start an independent background Claude Code agent and continue working. Returns immediately with a job ID; the job runs in a fresh isolated read-only Claude session on context captured at launch. Only one background job runs per Pi session, jobs do not survive the session, and this phase has no status/result/cancel tools — the job's result is not delivered back to this conversation yet.",
+		description: "Start an independent background Claude Code agent and continue working. Returns immediately with a job ID; the job runs in a fresh isolated read-only Claude session on context captured at launch. Only one background job runs per Pi session and jobs do not survive the session. When the job finishes (or fails, is cancelled, or is abandoned), its bounded result is delivered into this conversation as a message on a later turn — there are no status/result/cancel tools, so do not wait for or poll it.",
 		parameters: spawnClaudeAgentParams,
 		renderCall(args, theme) {
 			let text = theme.fg("mdLink", theme.bold("SpawnClaudeAgent "));
@@ -2618,5 +2619,13 @@ export default function (pi: ExtensionAPI) {
 		jobs: backgroundJobs,
 		captureDiff: captureReviewerDiff,
 		runJob: runBackgroundJobDelegation,
+	});
+	// The background-job UI adapter renders the same manager's records: the
+	// sticky live widget, /claude-jobs status/cancel, and the exactly-once
+	// terminal delivery (persisted TUI entry + non-triggering nextTurn message).
+	registerBackgroundJobUI(pi, {
+		enabled: Boolean(askConf?.enabled),
+		jobs: backgroundJobs,
+		onDebug: debug,
 	});
 }
