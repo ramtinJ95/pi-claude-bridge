@@ -434,7 +434,7 @@ still a dogfooding check because the harness has no live TUI driver:
 worktree directly. This path is local machine state, not a repository or
 packaging requirement.
 
-### Phase 3: background job core — next after interactive overlay dogfooding
+### Phase 3: background job core — Phase 3a ready to implement
 
 The AskClaude details overlay is reviewed and merged. Exercise its interactive
 dogfooding checks above before merging the background job core; implementation
@@ -494,14 +494,21 @@ Initial job-core decisions:
   staged and unstaged working-tree change from `HEAD`. Truncation and the chosen
   base must be visible in the job record so a reviewer cannot imply it saw
   omitted or later edits.
+- Keep `Agent` out of both initial profile inventories. `SpawnClaudeAgent` is
+  already the concurrency boundary; nested agents add process fan-out and a
+  forwarding dependency before the basic job lifecycle is proven.
+- Give both `explorer` and `reviewer` explicit read/search inventories containing
+  `Read`, `Glob`, `Grep`, `WebFetch`, and `WebSearch`, with no Bash or mutation
+  tools. Their role prompts differ, and only `reviewer` receives the immutable
+  launch-time status/diff artifact.
 
-[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) is the small
-readiness PR before the headless job-core PR. It pins the observed nested-`Agent`
-streaming contract and makes a signal already aborted at runner entry produce
-the normal cancelled outcome. The live probe permits Phase 3 to tree completed
-nested assistant messages, but does not prove nested tool events and forbids a
-dependency on token-level nested text for live status. Keep this PR free of
-job-manager or UI architecture.
+[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) merged as
+`111c40a` and completed the readiness boundary before the headless job-core PR.
+It pins the observed nested-`Agent` streaming contract and makes a signal already
+aborted at runner entry produce the normal cancelled outcome. The live probe
+permits Phase 3 to tree completed nested assistant messages, but does not prove
+nested tool events and forbids a dependency on token-level nested text for live
+status.
 
 The probe enables `Agent` and `forwardSubagentText` directly; neither is exposed
 by the current production options boundary, and the existing read inventory
