@@ -434,7 +434,7 @@ still a dogfooding check because the harness has no live TUI driver:
 worktree directly. This path is local machine state, not a repository or
 packaging requirement.
 
-### Phase 3: background job core — Phase 3a implemented, Phase 3b pending
+### Phase 3: background job core — Phase 3a PR #8 open, Phase 3b pending
 
 Readiness landed in
 [PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) (`111c40a`): a
@@ -446,7 +446,13 @@ enables `Agent`/`forwardSubagentText` directly and is not production wiring —
 if a future profile launches nested agents, add both capabilities deliberately
 through the pure options boundary and that profile's explicit inventory.
 
-#### Phase 3a: headless job core — implemented
+#### Phase 3a: headless job core — implemented in PR #8
+
+[PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) is open from
+`phase-3a-background-job-core`. Its commits deliberately separate shared
+snapshot retention, profile/diff capture, the job manager, Pi adapter wiring,
+and documentation. The branch passes 348 unit tests, TypeScript typecheck, npm
+package dry-run, and diff checks.
 
 Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
 
@@ -509,6 +515,24 @@ Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
   policy state without rerunning or inventing it; failed and abandoned jobs
   record neither. There is no second event format, framework, persistence,
   IPC, or Herdr backend.
+
+Current handoff before Phase 3b:
+
+- Review PR #8 for lifecycle correctness and parity with the Phase 3a boundary;
+  do not pull widget/completion-delivery work into this PR.
+- Before merge, reload Pi from this local worktree and exercise a real explorer
+  and reviewer launch from a non-claude-bridge provider. Confirm the tool returns
+  a job ID without blocking the main turn, a second concurrent spawn fails
+  visibly, and reviewer base/diff capture failures are explicit.
+- Exercise `/reload` while a real job runs. Confirm shutdown stays within the
+  two-second grace when cancellation does not settle, and inspect for an
+  orphaned Claude Code process. Unit tests characterize both confirmed
+  cancellation and timeout-to-`abandoned`; the real runtime timing remains the
+  only material Phase 3a uncertainty.
+- Phase 3a intentionally has no user-facing way to inspect a completed job
+  beyond its retained in-process record. Do not mistake that headless boundary
+  for lost scope: the widget, completion entry/message, and human lifecycle
+  commands are the next PR.
 
 #### Phase 3b: background job UI and completion delivery — remaining
 
