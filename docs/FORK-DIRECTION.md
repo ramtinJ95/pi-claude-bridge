@@ -481,6 +481,18 @@ cleanup covered by tests. Leave the sticky live-jobs widget, the TUI-only
 completion entry, the non-triggering model-visible completion message, and the
 human status/cancel commands to a second PR.
 
+Initial job-core decisions:
+
+- Allow one running background Claude job per Pi session. Reject a second spawn
+  visibly rather than silently queueing it; defer configurability until
+  dogfooding demonstrates a need and the process/quota cost is measured.
+- Give the `reviewer` a bounded repository status/diff artifact captured at job
+  launch. Claude receives the immutable artifact and no Bash capability. Support
+  an explicit comparison base for branch/PR review; without one, capture the
+  staged and unstaged working-tree change from `HEAD`. Truncation and the chosen
+  base must be visible in the job record so a reviewer cannot imply it saw
+  omitted or later edits.
+
 Two Phase 2 deferrals become load-bearing here and should be settled early: the
 live subagent partial-stream probe, since nested `Agent` relations decide whether
 background jobs can be rendered as a tree, and the pre-aborted-signal edge, since
