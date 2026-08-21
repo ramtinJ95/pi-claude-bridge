@@ -69,6 +69,10 @@ overlay with the latest AskClaude call (`/askclaude-details 2` opens call #2);
 branch, so completed calls stay inspectable after a session resume, and the
 latest call updates live while it runs.
 
+Pi 0.84.2 also assigns `Ctrl+N` inside its session picker. The extension owns
+the shortcut in the main editor, so Pi may report that overlap as an extension
+shortcut warning at startup; the session picker's focused binding still works.
+
 The pinned header shows only what the Claude delegation itself reported —
 runtime model, tokens/cache/cost/turns, Claude session ID, Claude working
 directory, runtime permission mode, status, capability, isolation, and requested

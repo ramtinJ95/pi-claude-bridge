@@ -17,6 +17,7 @@ import {
 	AskClaudeDetailsOverlay,
 	clearLiveAskClaudeCall,
 	getLiveAskClaudeCall,
+	registerAskClaudeDetailsUI,
 	subscribeLiveAskClaudeCall,
 	updateLiveAskClaudeCall,
 	__overlayTest,
@@ -430,11 +431,77 @@ describe("AskClaude live call state", () => {
 	it("keeps an explicitly selected earlier call pinned across live updates", () => {
 		const base = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
 		const loadRecords = () => mergeLiveCall(base, getLiveAskClaudeCall());
-		const { overlay } = makeOverlay(loadRecords, { requestedIndex: 1 });
+		let bodyHeadings = 0;
+		const countingTheme = {
+			fg: (color, text) => {
+				if (color === "muted" && String(text).startsWith("──")) bodyHeadings++;
+				return text;
+			},
+			bold: (text) => text,
+		};
+		const tui = stubTui();
+		const overlay = new AskClaudeDetailsOverlay(tui, countingTheme, kb, () => {}, loadRecords, 1);
 		assert.match(overlay.render(100).join("\n"), /call 1\/3/);
+		const headingsAfterInitialRender = bodyHeadings;
 
 		updateLiveAskClaudeCall({ toolCallId: "call-4", startedAt: 1, prompt: "live", details: { prompt: "live" } });
 		assert.match(overlay.render(100).join("\n"), /call 1\/4/);
+		assert.equal(bodyHeadings, headingsAfterInitialRender, "a live update must not rebuild a pinned call's Markdown body");
 		overlay.dispose();
+	});
+
+	it("invalidates cached themed body lines", () => {
+		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "AskClaude");
+		let marker = "before:";
+		const changingTheme = {
+			fg: (color, text) => color === "muted" && String(text).startsWith("──") ? `${marker}${text}` : text,
+			bold: (text) => text,
+		};
+		const tui = stubTui();
+		const overlay = new AskClaudeDetailsOverlay(tui, changingTheme, kb, () => {}, () => records);
+		assert.match(overlay.render(100).join("\n"), /before:── Prompt/);
+		marker = "after:";
+		overlay.invalidate();
+		const rendered = overlay.render(100).join("\n");
+		assert.match(rendered, /after:── Prompt/);
+		assert.doesNotMatch(rendered, /before:── Prompt/);
+		overlay.dispose();
+	});
+});
+
+describe("AskClaude overlay registration", () => {
+	it("does not let a closing overlay clear the replacement overlay's toggle owner", async () => {
+		const commands = new Map();
+		const shortcuts = new Map();
+		registerAskClaudeDetailsUI({
+			registerCommand: (name, command) => commands.set(name, command),
+			registerShortcut: (key, shortcut) => shortcuts.set(key, shortcut),
+		}, { toolName: "AskClaude" });
+
+		let customCalls = 0;
+		const ctx = {
+			mode: "tui",
+			sessionManager: { getBranch: () => [callEntry("call-1", "prompt"), resultEntry("call-1", completedDetails())] },
+			ui: {
+				notify: () => {},
+				custom: (factory) => new Promise((resolve) => {
+					customCalls++;
+					let component;
+					const done = (value) => {
+						component?.dispose();
+						resolve(value);
+					};
+					component = factory(stubTui(), theme, kb, done);
+				}),
+			},
+		};
+
+		const first = commands.get("askclaude-details").handler("", ctx);
+		const second = commands.get("askclaude-details").handler("", ctx);
+		await Promise.resolve(); // let the first overlay's finally run
+		await shortcuts.get("ctrl+n").handler(ctx); // closes the replacement
+		await Promise.all([first, second]);
+
+		assert.equal(customCalls, 2, "Ctrl+N must close the replacement instead of opening a third overlay");
 	});
 });

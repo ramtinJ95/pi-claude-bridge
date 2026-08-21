@@ -2121,7 +2121,13 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 	pi.on("session_compact", (event) => markRebuild(`session_compact:${event.reason}:willRetry=${event.willRetry}`));
-	pi.on("session_tree", () => markRebuild("session_tree"));
+	pi.on("session_tree", () => {
+		markRebuild("session_tree");
+		// Rewind, fork-at-point, and branch switching can remove the most recent
+		// AskClaude call from the active branch. Do not merge its stale live slot
+		// back into the overlay after navigation.
+		clearLiveAskClaudeCall();
+	});
 
 	// Branch summarization — rewind or fork-at-point with "summarize" — is the other
 	// place pi asks the model for a summary, and unlike compaction it runs through

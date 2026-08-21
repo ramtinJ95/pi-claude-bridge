@@ -417,7 +417,9 @@ still a dogfooding check because the harness has no live TUI driver:
 - Open and close with both `ctrl+n` and `/askclaude-details` during a running
   call; confirm live updates and no focus leak.
 - Exercise regular/fullscreen modes and a small terminal.
-- Confirm `ctrl+n` has no practical binding conflict.
+- Confirm the documented Pi 0.84.2 `ctrl+n` session-picker overlap is acceptable
+  in practice; the extension owns it in the main editor but Pi may show a
+  startup warning.
 - Resume a session and inspect earlier AskClaude calls.
 
 #### Local dogfooding state — this workstation only

@@ -112,12 +112,25 @@ export class AskClaudeDetailsOverlay {
 
 	private reload(): void {
 		if (this.disposed) return;
+		const previous = this.current;
 		this.records = this.loadRecords();
 		const pinned = this.selectedToolCallId
 			? this.records.findIndex((record) => record.toolCallId === this.selectedToolCallId)
 			: -1;
 		this.callIndex = pinned >= 0 ? pinned : this.records.length - 1;
-		this.bodyCache = null;
+		const current = this.current;
+		// A live update can add or update the latest call while this overlay is
+		// pinned to an older, immutable record. Keep its parsed Markdown body in
+		// that case; rebuilding retained tool output on every live tick is costly.
+		if (
+			previous?.toolCallId !== current?.toolCallId ||
+			previous?.details !== current?.details ||
+			previous?.prompt !== current?.prompt ||
+			previous?.status !== current?.status ||
+			previous?.live !== current?.live
+		) {
+			this.bodyCache = null;
+		}
 		this.tui.requestRender();
 	}
 
@@ -230,7 +243,10 @@ export class AskClaudeDetailsOverlay {
 		return lines;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		// Rendered body lines contain theme-specific ANSI styling.
+		this.bodyCache = null;
+	}
 
 	dispose(): void {
 		this.disposed = true;
@@ -255,6 +271,7 @@ export function registerAskClaudeDetailsUI(pi: ExtensionAPI, options: { toolName
 			ctx.ui.notify(`No ${options.toolName} calls in this session branch yet.`, "info");
 			return;
 		}
+		let finishForThisOpen: (() => void) | null = null;
 		try {
 			await ctx.ui.custom<void>(
 				(tui, theme, keybindings, done) => {
@@ -262,6 +279,7 @@ export function registerAskClaudeDetailsUI(pi: ExtensionAPI, options: { toolName
 						if (closeActive === finish) closeActive = null;
 						done(undefined);
 					};
+					finishForThisOpen = finish;
 					closeActive = finish;
 					return new AskClaudeDetailsOverlay(tui, theme, keybindings, finish, loadRecords, requestedIndex);
 				},
@@ -271,7 +289,9 @@ export function registerAskClaudeDetailsUI(pi: ExtensionAPI, options: { toolName
 				},
 			);
 		} finally {
-			closeActive = null;
+			// A replacement overlay may already own the global toggle by the time
+			// the previous custom() promise settles.
+			if (closeActive === finishForThisOpen) closeActive = null;
 		}
 	};
 
