@@ -86,7 +86,15 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 		messageCount,
 	});
 
-	if (input.signal?.aborted) throw new Error("Aborted");
+	if (input.signal?.aborted) {
+		// A queued background job can be cancelled before its runner gets CPU.
+		// Report that through the same terminal outcome as an in-flight abort;
+		// there is no SDK process to create, interrupt, or close in this path.
+		wasAborted = true;
+		snapshot = { ...snapshot, status: "cancelled", updatedAt: now() };
+		publish();
+		return completedResult("cancelled");
+	}
 
 	try {
 		sdkQuery = (input.queryFactory ?? defaultQueryFactory)({
