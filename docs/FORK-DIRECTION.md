@@ -265,10 +265,10 @@ background jobs. Do not introduce a profile/plugin framework, generic event-bus
 package, repository layer, or persistence abstraction for the initial two
 profiles and session-scoped job store.
 
-## Proposed internal architecture
+## Internal architecture
 
-Refactor toward the following boundaries while keeping behavior characterized
-by tests:
+The implementation uses these boundaries; preserve them as later phases add
+adapters:
 
 ### Shared query policy and options
 
@@ -333,260 +333,99 @@ by tests:
 - Treat an absent or stale extension endpoint as an explicit unavailable state;
   it does not recover jobs from a prior Pi process.
 
-## Delivery phases
+## Delivery status and handoff
 
-### Phase 0: establish the fork baseline — complete
+### Completed foundation: Phases 0–2
 
-Completed in [PR #2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2).
-The fork requires Pi 0.84.2 and Node.js 22.19, tests against matching Pi
-packages, records Agent SDK/Claude Code versions, and explicitly documents the
-provider lifecycle-hook gap without fabricating payload or HTTP response data.
+- [PR #2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2): Pi 0.84.2 and
+  Node.js 22.19 baseline, matching development packages, and truthful provider
+  lifecycle-hook compatibility characterization.
+- [PR #3](https://github.com/ramtinJ95/pi-claude-bridge/pull/3): structural
+  capability policy, configurable `permissionMode: "auto"`, safe AskClaude
+  read/isolated defaults, and visible runtime policy overrides.
+- [PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4) and
+  [PR #5](https://github.com/ramtinJ95/pi-claude-bridge/pull/5): shared
+  Claude-native delegation runner, normalized bounded/redacted snapshots, and
+  rich blocking AskClaude rendering.
+- [PR #6](https://github.com/ramtinJ95/pi-claude-bridge/pull/6): scrollable
+  `/askclaude-details` / `Ctrl+N` overlay with Claude-only telemetry and retained
+  tool/timeline inspection.
+- [PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7): pre-aborted
+  runner safety and live characterization of the installed nested-Agent stream
+  behavior. Production profiles still exclude nested `Agent`.
 
-### Phase 1: correctness and policy semantics — complete
+### Phase 3: background Claude agents — implementation complete
 
-Completed in [PR #3](https://github.com/ramtinJ95/pi-claude-bridge/pull/3),
-merged as `1754acc`. Capability and permission policy are separate; provider,
-compaction, and delegation queries use configurable `auto` by default; and
-AskClaude defaults to structural read capability in a fresh isolated session.
-Requested/runtime permission differences, denials, and observable managed-policy
-constraints remain visible. Managed policy still wins: this machine currently
-forces runtime `default`, requires sandboxing, and may deny provider MCP tools
-until an administrator grants their exact aliases.
+- [PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) added the
+  headless `SpawnClaudeAgent` core: one session-scoped job, isolated read-only
+  `explorer`/`reviewer` profiles, bounded tracked-and-untracked reviewer
+  artifacts, collision-resistant IDs, explicit terminal states, cancellation,
+  and bounded shutdown/reset cleanup.
+- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) adds the Phase
+  3b presentation/delivery adapter over that same manager and snapshot:
+  a compact sticky live widget; `/claude-jobs` status and human cancellation;
+  one restore-safe TUI-only completion entry; and one bounded model-visible
+  completion queued with
+  `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`.
+  Shutdown/reset settlements are suppressed so an old job cannot deliver into
+  a replacement session. No model-callable lifecycle tools or second job-state
+  system were added.
 
-### Phase 2: normalized events and richer blocking UI — complete
+Phase 3 validation is 375 passing unit tests, clean TypeScript typecheck and
+`git diff --check`, and a package dry-run containing the new UI module. The
+Phase 3b review found and fixed two restore-path bugs: malformed/future entry
+payloads now degrade visibly rather than throwing, and persisted entries remain
+renderable if AskClaude is later disabled.
 
-Completed in [PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4)
-(`5b5740a`) and [PR #5](https://github.com/ramtinJ95/pi-claude-bridge/pull/5)
-(`7c80a88`). The delegation lane now has a provider-independent Agent SDK runner,
-pure policy/options boundary, normalized snapshot, explicit terminal states, and
-bounded live/final AskClaude rendering. The provider remains on its specialized
-`QueryContext`/MCP/session path.
+### Current handoff: runtime dogfooding
 
-The retained AskClaude record uses named, independently tested limits rather
-than a persistence promise: about 16k characters for the model-facing result,
-2k per tool input/output, 32k/100 timeline events, 4k thinking summary, and
-bounded retained lists. Truncation is visible; credential redaction is
-best-effort. The authoritative SDK result wins over streamed narration, terminal
-errors remain visible, and policy annotations survive the total model-result
-budget.
+The implementation is complete; the next gate is real Pi runtime validation.
+This workstation loads `/Users/ramtin/personal/pi-claude-bridge` directly from
+`~/.pi/agent/settings.json`, so `/reload` loads the current worktree.
 
-Open Phase 2 runtime edges are deliberately visible:
+1. Run real `explorer` and `reviewer` jobs from a non-claude-bridge provider.
+   Confirm immediate job-ID return, visible rejection of a second concurrent
+   spawn, and explicit invalid-base failures.
+2. Exercise the live widget in regular, fullscreen, and a small terminal. Test
+   `/claude-jobs` and `/claude-jobs cancel`, including completion and human
+   cancellation.
+3. Confirm exactly one completion reaches the model with the next prompt,
+   including when a main-agent turn is active as the job settles. Quitting Pi
+   before the next prompt is a known loss boundary for the in-memory queued
+   message; the persisted TUI entry remains.
+4. Run `/reload` during a real job and inspect for orphaned Claude Code
+   processes. Resume a session containing completion entries and confirm their
+   renderer restores correctly.
+5. Finish the outstanding AskClaude overlay checks: running-call open/close via
+   both `Ctrl+N` and `/askclaude-details`, small/fullscreen rendering, restored
+   calls, and whether the Pi 0.84.2 `Ctrl+N` conflict is acceptable.
 
-- The Pi `tool_result` promotion of AskClaude cancellation/error details is
-  unit-tested but has not had an end-to-end live cancellation exercise.
-- Expanded rendering performance should be measured before adding caching.
-- Oversized tool input labels honestly degrade to visibly truncated JSON.
+Do not begin Phase 4 by default until this dogfooding is recorded and any
+blocking runtime issue is fixed.
 
-The Phase 3 readiness work settles two former edges: a signal already aborted
-before runner entry returns the normal cancelled outcome without creating an SDK
-query, and a live `tests/int-cc-contracts.mjs` probe establishes that completed
-nested Agent assistant messages carry their parent tool-use ID. The installed
-SDK/Claude Code emits no nested token-level partial stream frames even with
-`forwardSubagentText` and partial messages enabled. Nested tool parenting remains
-covered by synthetic reducer tests, not this live probe.
+### Deferred Herdr investigation
 
-#### Phase 2 dogfooding follow-up: AskClaude details overlay — PR #6 merged
-
-[PR #6](https://github.com/ramtinJ95/pi-claude-bridge/pull/6) merged as
-`cd71dab`. It adds the missing
-deep-inspection surface found during dogfooding. `/askclaude-details` and
-`ctrl+n` open one centered, scrollable Pi overlay for the latest or a prior
-AskClaude call. Its pinned header uses only Claude delegation data—runtime model,
-SDK usage/cost/turns, Claude session/cwd, runtime permission, status, capability,
-isolation, and requested thinking—with no Pi metadata fallback. The body shows
-the original persisted prompt, emitted thinking summary, retained nested tools,
-retained timeline, and authoritative response.
-
-The inline expanded row is intentionally concise: Claude metadata, policy and
-error state, prompt/thinking/response, one grouped action summary, and aggregate
-tool counts. Per-tool inputs/outputs/durations/nesting and lifecycle events live
-only in the overlay. This keeps the transcript readable without changing what
-the retained snapshot stores.
-
-Implementation boundaries remain narrow:
-
-- `askclaude-details.ts` extracts view models from real branch tool-call/result
-  records, including a configured custom AskClaude name and restored sessions.
-- `askclaude-overlay.ts` owns the component, command/shortcut registration, and
-  one bounded in-memory live slot. It is not a general viewer framework and
-  Phase 3 does not depend on it.
-- The live slot receives the same retained/redacted details used by the inline
-  row, is shadowed by the persisted result, replaced by the next call, and
-  cleared on session change/shutdown.
-
-The repository tests completed-call extraction, navigation, Claude-only
-metadata, scrolling, responsive rendering, live-store merge/cleanup, and the
-inline/overlay division. Interactive behavior while blocking AskClaude runs is
-still a dogfooding check because the harness has no live TUI driver:
-
-- Open and close with both `ctrl+n` and `/askclaude-details` during a running
-  call; confirm live updates and no focus leak.
-- Exercise regular/fullscreen modes and a small terminal.
-- Confirm the documented Pi 0.84.2 `ctrl+n` session-picker overlap is acceptable
-  in practice; the extension owns it in the main editor but Pi may show a
-  startup warning.
-- Resume a session and inspect earlier AskClaude calls.
-
-#### Local dogfooding state — this workstation only
-
-`~/.pi/agent/settings.json` points at
-`/Users/ramtin/personal/pi-claude-bridge`, so a restarted Pi process loads this
-worktree directly. This path is local machine state, not a repository or
-packaging requirement.
-
-### Phase 3: background job core — Phase 3a PR #8 open, Phase 3b pending
-
-Readiness landed in
-[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) (`111c40a`): a
-signal already aborted at runner entry produces the normal cancelled outcome,
-and a live probe pins the nested-`Agent` streaming contract. The probe permits
-treeing completed nested assistant messages but does not prove nested tool
-events and forbids depending on token-level nested text for live status; it
-enables `Agent`/`forwardSubagentText` directly and is not production wiring —
-if a future profile launches nested agents, add both capabilities deliberately
-through the pure options boundary and that profile's explicit inventory.
-
-#### Phase 3a: headless job core — implemented in PR #8
-
-[PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) is open from
-`phase-3a-background-job-core`. Its commits deliberately separate shared
-snapshot retention, profile/diff capture, the job manager, Pi adapter wiring,
-and documentation. The branch passes 348 unit tests, TypeScript typecheck, npm
-package dry-run, and diff checks.
-
-Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
-
-- `SpawnClaudeAgent` is a first-class Pi tool registered under the same opt-in
-  as AskClaude (and, like AskClaude, only usable from non-claude-bridge
-  providers — the claude-bridge provider gets a visible circular-delegation
-  error). It returns promptly with a stable job ID and takes
-  AskClaude-consistent `model`/`thinking` parameters plus `profile`, `task`,
-  and an optional reviewer `base`. A background job is another caller of the
-  shared delegation runner: it never enters AskClaude finalization, provider
-  `QueryContext`, shared-session synchronization, or MCP result routing. The
-  wiring lives behind a narrow injected adapter seam
-  (`registerSpawnClaudeAgent`), so registration, launch, and lifecycle cleanup
-  are unit-tested without launching Claude.
-- The launch honors the initiating tool call's `AbortSignal`: a call cancelled
-  before or during reviewer diff capture returns a visible error and starts no
-  detached job (and a spawn the manager would reject anyway skips diff capture
-  entirely). Once the job ID is returned, the job's own per-job
-  `AbortController` owns its lifecycle — the initiating call's signal plays no
-  further part.
-- `src/background-jobs.ts` owns the Pi-session-scoped lifecycle: one running
-  job per session (a second spawn throws and is promoted to a visible error
-  tool result, never queued — configurability deferred until dogfooding shows
-  a need), per-job `AbortController`, explicit first-wins terminal states
-  (`succeeded`, `failed`, `cancelled`, `abandoned`), bounded in-memory records
-  (20, oldest terminal evicted), and session shutdown/switch cleanup. Job IDs
-  are a collision-resistant random per-manager prefix (12 hex chars from Node
-  crypto) plus a monotonic counter (e.g. `claude-job-3f9c2d1a7b4e-1`): a new
-  extension runtime gets a new prefix, so cross-runtime collisions are
-  overwhelmingly unlikely, and a session reset never reuses an ID within one
-  manager. Shutdown and reset are
-  async — Pi 0.84.2 awaits `session_shutdown`/`session_start` handlers — so
-  they abort running jobs (the runner interrupts and closes the Claude Code
-  query) and wait up to a named 2-second grace
-  (`BACKGROUND_JOB_SHUTDOWN_GRACE_MS`) for settlement. A job that settles
-  inside the grace keeps its genuine terminal state (usually `cancelled`);
-  only jobs still unconfirmed when the grace expires are recorded as
-  `abandoned`, and a late settlement never rewrites a terminal state.
-  `abandoned` is a job-layer state only; `DelegationSnapshot` keeps its four
-  delegation statuses.
-- `src/agent-profiles.ts` holds the profiles as explicit data that select the
-  existing pure policy boundary: `explorer` and `reviewer` both resolve to the
-  read inventory (`Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`; no Bash,
-  mutation, or `Agent`) with distinct role prompts, and jobs always run
-  isolated. No profile carries its own policy code.
-- `src/reviewer-diff.ts` captures the reviewer's immutable status/diff artifact
-  at launch — by the extension, never by Claude. An explicit `base` diffs from
-  the merge base of `base` and HEAD to the launch-time working tree (branch/PR
-  semantics); without one it captures tracked changes from HEAD. In both modes,
-  untracked file contents are also captured rather than merely listed by status.
-  The artifact is bounded under named tested limits (40k diff / 4k status)
-  with visible truncation, best-effort redaction, and a recorded source;
-  non-git directories and invalid refs fail the spawn instead of yielding a
-  misleading empty diff. Launch cwd/context are captured immutably, and the
-  job prompt states honestly that Read/Glob/Grep see the live working tree
-  while the artifact stays frozen.
-- Job records reuse the retained/redacted `DelegationSnapshot`, and a job that
-  settles through the runner (succeeded/cancelled) also keeps the runner's
-  observed permission mode and non-sensitive managed-policy summary — bounded
-  facts, never raw policy rules — so Phase 3b can render the actual delegation
-  policy state without rerunning or inventing it; failed and abandoned jobs
-  record neither. There is no second event format, framework, persistence,
-  IPC, or Herdr backend.
-
-Current handoff before Phase 3b:
-
-- Review PR #8 for lifecycle correctness and parity with the Phase 3a boundary;
-  do not pull widget/completion-delivery work into this PR.
-- Before merge, reload Pi from this local worktree and exercise a real explorer
-  and reviewer launch from a non-claude-bridge provider. Confirm the tool returns
-  a job ID without blocking the main turn, a second concurrent spawn fails
-  visibly, and reviewer base/diff capture failures are explicit.
-- Exercise `/reload` while a real job runs. Confirm shutdown stays within the
-  two-second grace when cancellation does not settle, and inspect for an
-  orphaned Claude Code process. Unit tests characterize both confirmed
-  cancellation and timeout-to-`abandoned`; the real runtime timing remains the
-  only material Phase 3a uncertainty.
-- Phase 3a intentionally has no user-facing way to inspect a completed job
-  beyond its retained in-process record. Do not mistake that headless boundary
-  for lost scope: the widget, completion entry/message, and human lifecycle
-  commands are the next PR.
-
-#### Phase 3b: background job UI and completion delivery — remaining
-
-- The sticky live-jobs widget and human status/cancel commands (the manager's
-  `cancel` contract exists and is tested; nothing invokes it yet).
-- Bounded completed-job details as a TUI-only custom entry.
-- One bounded non-triggering model-visible completion message using Pi
-  0.84.2's `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`.
-- The interactive AskClaude-overlay dogfooding checks listed under Phase 2,
-  plus live dogfooding of a real background job end-to-end.
-
-#### Deferred investigation: observable Herdr-backed Claude jobs
-
-Investigate, after the in-process `SpawnClaudeAgent` job core works, whether an
-explicit alternate execution mode can launch Claude Code in a user-visible Herdr
-pane. The product goal is observability: the user can watch Claude's native
-session while Pi still receives a job identifier, lifecycle state, cancellation,
-and a bounded final result. It is not part of the readiness or initial job-core
-PR and must not make Herdr a required dependency.
-
-The probe must establish rather than assume that a Pi session running inside
-Herdr can:
-
-- create a background pane without stealing focus and preserve the captured cwd;
-- start the installed Claude agent kind with an explicit model and thinking
-  level, then submit the captured body of work;
-- observe working, blocked, completed, and unknown states and obtain a reliable
-  bounded result rather than scraping an incomplete alternate-screen viewport;
-- cancel and clean up only the pane/job it owns; and
-- preserve the same profile capability guarantees, managed-policy behavior,
-  retention/redaction boundaries, and visible terminal-state semantics as the
-  Agent SDK backend.
-
-Treat this as a deliberate backend choice, never a silent fallback. If Pi is not
-running inside Herdr, the mode must be visibly unavailable. Decide from the probe
-whether Herdr is merely an optional observable frontend for the same job contract
-or too lifecycle-ambiguous to support. Do not replace the structured Agent SDK
-path solely to gain terminal visibility.
+Investigate an explicit optional Herdr backend only after the in-process path
+is proven. A probe must establish no-focus-steal pane creation, captured cwd,
+explicit model/thinking launch, reliable lifecycle/result observation without
+viewport scraping, owned cancellation/cleanup, and the same policy/retention
+guarantees as the SDK path. It must be visibly unavailable outside Herdr and
+must never silently replace or fall back from the structured SDK backend.
 
 ### Phase 4: dynamic lifecycle tools
 
-- Add deferred `pi-codex-conversion` custom tools for status, result, and cancel.
+- Add deferred `pi-codex-conversion` code-mode tools for bounded status, result,
+  and cancellation without expanding Pi's first-class model tool list.
 - Add authenticated local IPC and per-session endpoint discovery over the
-  already-proven in-memory job manager.
-- Test multiple concurrent Pi sessions, stale endpoint cleanup, bounded replies,
-  and explicit unavailable behavior after session shutdown.
+  in-memory manager.
+- Test concurrent Pi sessions, stale endpoints, bounded replies, and explicit
+  unavailability after session shutdown.
 
 ### Phase 5: independent packaging
 
 - Decide whether divergence warrants a new package/provider/config namespace.
-- Preserve upstream attribution and document migration from
-  `pi-claude-bridge`.
-- Keep an upstream-sync policy for high-value correctness fixes.
+- Preserve upstream attribution, document migration, and retain an explicit
+  upstream-sync policy for high-value correctness fixes.
 
 ## Non-goals
 
@@ -608,14 +447,12 @@ path solely to gain terminal visibility.
 
 These implementation and later-product decisions remain open:
 
-1. **Retention bounds and redaction:** choose and characterize per-item and
-   total caps, sensitive-field handling, and the exact bounded custom-entry
-   schema. The product decision to retain bounded, visibly truncated details in
-   the Pi session is settled.
-2. **IPC transport:** choose a Unix-domain socket, localhost authenticated
+1. **IPC transport:** choose a Unix-domain socket, localhost authenticated
    endpoint, or another explicit protocol for code-mode lifecycle tools.
-3. **Provider scope:** decide how much rich telemetry and UI from delegation
+2. **Provider scope:** decide how much rich telemetry and UI from delegation
    should also apply when Claude Bridge is selected as Pi's primary provider.
+3. **Herdr backend:** decide from a live probe whether its lifecycle/result
+   contract is reliable enough to support as an explicit optional backend.
 4. **Independent name:** choose a package, provider, and config namespace only
    after the architecture has materially diverged.
 

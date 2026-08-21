@@ -416,6 +416,95 @@ describe("background job manager", () => {
 		assert.deepEqual(sleeps, []);
 	});
 
+	it("emits spawned, updated, and one settled transition per job in order", async () => {
+		const manager = testManager();
+		const transitions = [];
+		manager.subscribe((transition) => transitions.push(transition));
+
+		const pending = pendingExecutor();
+		const record = manager.spawn(spawnInput(pending.execute));
+		pending.state.onSnapshot({ ...createDelegationSnapshot(1), responseText: "partial" });
+		pending.resolve(runResult());
+		await manager.settled(record.id);
+
+		assert.deepEqual(transitions.map((transition) => transition.type), ["spawned", "updated", "settled"]);
+		assert.equal(transitions[0].record.id, record.id);
+		assert.equal(transitions[1].record.snapshot.responseText, "partial");
+		assert.equal(transitions[2].record.status, "succeeded");
+		assert.equal(transitions[2].duringShutdown, false);
+		// The settled record is the stored terminal record, retained snapshot included.
+		assert.deepEqual(transitions[2].record, manager.get(record.id));
+	});
+
+	it("flags every shutdown-window settlement as duringShutdown — confirmed cancel and abandonment alike", async () => {
+		const manager = testManager({ sleep: instantSleep });
+		const transitions = [];
+		manager.subscribe((transition) => transitions.push(transition));
+
+		// Confirmed inside the grace: genuine cancelled state, still flagged.
+		const confirmed = pendingExecutor();
+		const first = manager.spawn(spawnInput(confirmed.execute));
+		confirmed.state.signal.addEventListener("abort", () => confirmed.resolve(runResult("cancelled", "cancelled")), { once: true });
+		await manager.shutdown();
+		const firstSettled = transitions.find((transition) => transition.type === "settled");
+		assert.equal(firstSettled.record.id, first.id);
+		assert.equal(firstSettled.record.status, "cancelled");
+		assert.equal(firstSettled.duringShutdown, true);
+
+		// Unconfirmed after the grace: abandoned, flagged, and emitted exactly once.
+		transitions.length = 0;
+		const wedged = pendingExecutor();
+		const second = manager.spawn(spawnInput(wedged.execute));
+		await manager.reset();
+		const settled = transitions.filter((transition) => transition.type === "settled");
+		assert.equal(settled.length, 1);
+		assert.equal(settled[0].record.id, second.id);
+		assert.equal(settled[0].record.status, "abandoned");
+		assert.equal(settled[0].duringShutdown, true);
+		// Reset announces the record wipe after the settlements.
+		assert.equal(transitions[transitions.length - 1].type, "cleared");
+
+		// The wedged executor's late settlement emits nothing further.
+		transitions.length = 0;
+		wedged.resolve(runResult("cancelled", "cancelled"));
+		await manager.settled(second.id);
+		assert.deepEqual(transitions, []);
+	});
+
+	it("emits settled exactly once per job even when cancel and success race", async () => {
+		const manager = testManager();
+		const transitions = [];
+		manager.subscribe((transition) => transitions.push(transition));
+
+		const pending = pendingExecutor();
+		const record = manager.spawn(spawnInput(pending.execute));
+		manager.cancel(record.id);
+		pending.resolve(runResult("cancelled", "cancelled"));
+		await manager.settled(record.id);
+
+		assert.equal(transitions.filter((transition) => transition.type === "settled").length, 1);
+	});
+
+	it("isolates listener failures from job lifecycle and honors unsubscribe", async () => {
+		const debugLines = [];
+		const manager = testManager({ onDebug: (line) => debugLines.push(line) });
+		const seen = [];
+		manager.subscribe(() => { throw new Error("listener boom"); });
+		const unsubscribe = manager.subscribe((transition) => seen.push(transition.type));
+
+		const record = manager.spawn(spawnInput(async () => runResult()));
+		await manager.settled(record.id);
+		// The throwing listener neither blocked the lifecycle nor the next listener.
+		assert.equal(manager.get(record.id).status, "succeeded");
+		assert.deepEqual(seen, ["spawned", "settled"]);
+		assert.ok(debugLines.some((line) => line.includes("listener error") && line.includes("listener boom")));
+
+		unsubscribe();
+		const next = manager.spawn(spawnInput(async () => runResult()));
+		await manager.settled(next.id);
+		assert.deepEqual(seen, ["spawned", "settled"]);
+	});
+
 	it("retains an oversized task in the record without altering the visible head", async () => {
 		const manager = testManager();
 		const record = manager.spawn(spawnInput(async () => runResult(), { task: "t".repeat(10_000) }));

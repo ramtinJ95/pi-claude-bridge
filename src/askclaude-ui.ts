@@ -219,7 +219,7 @@ function addSection(container: Container, title: string, body: string): void {
 	container.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
 }
 
-function usageLine(snapshot?: DelegationSnapshot): string | undefined {
+export function usageLine(snapshot?: DelegationSnapshot): string | undefined {
 	const usage = snapshot?.usage;
 	if (!usage) return undefined;
 	const tokens = `${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out`;
