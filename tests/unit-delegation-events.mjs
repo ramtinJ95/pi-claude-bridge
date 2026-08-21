@@ -156,6 +156,8 @@ describe("normalized delegation events", () => {
 	it("preserves the subagent parent relation across a nested call's frames", () => {
 		const parent = "toolu_agent";
 		const messages = [
+			// Synthetic reducer coverage: the installed runtime's live contract probe
+			// currently emits completed nested messages, not nested stream_event frames.
 			{
 				type: "stream_event",
 				parent_tool_use_id: parent,

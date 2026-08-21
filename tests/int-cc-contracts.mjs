@@ -283,7 +283,7 @@ test("forwardSubagentText parents completed subagent messages but emits no neste
 	// assistant messages with the Agent tool_use parent, but includePartialMessages
 	// does not extend to the child stream. Pin both halves so Phase 3 neither
 	// flattens completed child output nor promises token-level nested text.
-	let agentToolUseId = null;
+	const agentToolUseIds = new Set();
 	const nestedPartialParents = new Set();
 	const nestedAssistantParents = new Set();
 	let nestedAssistantText = "";
@@ -321,8 +321,8 @@ test("forwardSubagentText parents completed subagent messages but emits no neste
 				}
 			}
 			for (const block of message.message?.content ?? []) {
-				if (block.type === "tool_use" && block.name === "Agent" && message.parent_tool_use_id === null) {
-					agentToolUseId = block.id;
+				if (block.type === "tool_use" && block.name === "Agent" && !message.parent_tool_use_id) {
+					agentToolUseIds.add(block.id);
 				}
 			}
 		}
@@ -331,9 +331,12 @@ test("forwardSubagentText parents completed subagent messages but emits no neste
 		}
 	}
 
-	assert.equal(typeof agentToolUseId, "string", "Claude never invoked the configured probe-child Agent");
-	assert.deepEqual([...nestedAssistantParents], [agentToolUseId],
-		`nested assistant messages did not point at Agent ${agentToolUseId}: ${JSON.stringify([...nestedAssistantParents])}`);
+	assert.ok(agentToolUseIds.size > 0, "Claude never invoked the configured probe-child Agent");
+	assert.ok(nestedAssistantParents.size > 0, "Claude emitted no completed nested assistant message");
+	for (const parent of nestedAssistantParents) {
+		assert.ok(agentToolUseIds.has(parent),
+			`nested assistant parent ${parent} matches no top-level Agent invocation: ${JSON.stringify([...agentToolUseIds])}`);
+	}
 	assert.match(nestedAssistantText, /NESTED-PARTIAL-PROBE/,
 		`the completed nested assistant message omitted the marker: ${JSON.stringify(nestedAssistantText)}`);
 	assert.deepEqual([...nestedPartialParents], [],

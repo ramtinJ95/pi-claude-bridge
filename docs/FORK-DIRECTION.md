@@ -372,16 +372,18 @@ budget.
 
 Open Phase 2 runtime edges are deliberately visible:
 
-- A signal already aborted before runner entry still takes the generic error
-  path rather than cancellation.
 - The Pi `tool_result` promotion of AskClaude cancellation/error details is
   unit-tested but has not had an end-to-end live cancellation exercise.
-- A live `tests/int-cc-contracts.mjs` probe established that completed nested
-  Agent messages carry their parent tool-use ID, but nested token-level partial
-  stream frames are not emitted by the installed SDK/Claude Code even when
-  `forwardSubagentText` and partial messages are enabled.
 - Expanded rendering performance should be measured before adding caching.
 - Oversized tool input labels honestly degrade to visibly truncated JSON.
+
+The Phase 3 readiness work settles two former edges: a signal already aborted
+before runner entry returns the normal cancelled outcome without creating an SDK
+query, and a live `tests/int-cc-contracts.mjs` probe establishes that completed
+nested Agent assistant messages carry their parent tool-use ID. The installed
+SDK/Claude Code emits no nested token-level partial stream frames even with
+`forwardSubagentText` and partial messages enabled. Nested tool parenting remains
+covered by synthetic reducer tests, not this live probe.
 
 #### Phase 2 dogfooding follow-up: AskClaude details overlay — PR #6 merged
 
@@ -493,17 +495,19 @@ Initial job-core decisions:
   base must be visible in the job record so a reviewer cannot imply it saw
   omitted or later edits.
 
-Two Phase 2 deferrals become load-bearing here and should be settled early: the
-live subagent partial-stream probe, since nested `Agent` relations decide whether
-background jobs can be rendered as a tree, and the pre-aborted-signal edge, since
-a job manager will cancel work it did not launch on the current call stack.
+[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) is the small
+readiness PR before the headless job-core PR. It pins the observed nested-`Agent`
+streaming contract and makes a signal already aborted at runner entry produce
+the normal cancelled outcome. The live probe permits Phase 3 to tree completed
+nested assistant messages, but does not prove nested tool events and forbids a
+dependency on token-level nested text for live status. Keep this PR free of
+job-manager or UI architecture.
 
-Use one small readiness PR before the headless job-core PR to settle those two
-edges: pin the observed nested-`Agent` streaming contract and make a signal
-already aborted at runner entry produce the normal cancelled outcome. The live
-probe means Phase 3 may tree completed nested messages and parented tool events,
-but must not depend on token-level nested text for live status. Keep this PR free
-of job-manager or UI architecture.
+The probe enables `Agent` and `forwardSubagentText` directly; neither is exposed
+by the current production options boundary, and the existing read inventory
+deliberately excludes `Agent`. If a Phase 3a profile is allowed to launch nested
+agents, add both capabilities deliberately through the pure options boundary and
+that profile's explicit inventory. Do not treat the probe as production wiring.
 
 #### Deferred investigation: observable Herdr-backed Claude jobs
 
