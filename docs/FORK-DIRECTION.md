@@ -361,7 +361,7 @@ adapters:
   `explorer`/`reviewer` profiles, bounded tracked-and-untracked reviewer
   artifacts, collision-resistant IDs, explicit terminal states, cancellation,
   and bounded shutdown/reset cleanup.
-- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) adds the Phase
+- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) added the Phase
   3b presentation/delivery adapter over that same manager and snapshot:
   a compact sticky live widget; `/claude-jobs` status and human cancellation;
   one restore-safe TUI-only completion entry; and one bounded model-visible
@@ -371,13 +371,19 @@ adapters:
   a replacement session. No model-callable lifecycle tools or second job-state
   system were added.
 
-Phase 3 validation is 375 passing unit tests, clean TypeScript typecheck and
+Phase 3 validation was 375 passing unit tests, clean TypeScript typecheck and
 `git diff --check`, and a package dry-run containing the new UI module. The
 Phase 3b review found and fixed two restore-path bugs: malformed/future entry
 payloads now degrade visibly rather than throwing, and persisted entries remain
 renderable if AskClaude is later disabled.
 
-### Unified Claude Sessions overlay — current implementation
+### Unified Claude Sessions overlay — complete
+
+[PR #10](https://github.com/ramtinJ95/pi-claude-bridge/pull/10) unified the
+previously separate AskClaude details and background-job status surfaces. Its
+final validation is 408 passing unit tests, clean TypeScript typecheck and
+`git diff --check`, plus a package dry-run containing the replacement overlay
+and omitting the superseded AskClaude-only module.
 
 The AskClaude-only details overlay from PR #6 has been superseded by one
 unified "Claude Sessions" overlay covering both AskClaude calls and background
