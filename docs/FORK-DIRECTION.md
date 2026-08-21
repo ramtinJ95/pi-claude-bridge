@@ -434,87 +434,91 @@ still a dogfooding check because the harness has no live TUI driver:
 worktree directly. This path is local machine state, not a repository or
 packaging requirement.
 
-### Phase 3: background job core — Phase 3a ready to implement
+### Phase 3: background job core — Phase 3a implemented, Phase 3b pending
 
-The AskClaude details overlay is reviewed and merged. Exercise its interactive
-dogfooding checks above before merging the background job core; implementation
-readiness work that does not depend on those TUI results can proceed meanwhile.
+Readiness landed in
+[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) (`111c40a`): a
+signal already aborted at runner entry produces the normal cancelled outcome,
+and a live probe pins the nested-`Agent` streaming contract. The probe permits
+treeing completed nested assistant messages but does not prove nested tool
+events and forbids depending on token-level nested text for live status; it
+enables `Agent`/`forwardSubagentText` directly and is not production wiring —
+if a future profile launches nested agents, add both capabilities deliberately
+through the pure options boundary and that profile's explicit inventory.
 
-- Implement the job manager and lifecycle state machine.
-- Add `SpawnClaudeAgent` with `explorer` and `reviewer` profiles.
-- Enforce read-only capabilities structurally, not only through prompts.
-- Add cancellation and session-shutdown cleanup tests.
-- Add the sticky live-jobs widget and human status/cancel commands.
-- Persist bounded completed-job details as TUI-only custom entries and deliver
-  one bounded non-triggering model-visible result message.
+#### Phase 3a: headless job core — implemented
 
-#### Starting handoff
+Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
 
-Build on what Phase 2 merged instead of standing up a second execution stack:
+- `SpawnClaudeAgent` is a first-class Pi tool registered under the same opt-in
+  as AskClaude (and, like AskClaude, only usable from non-claude-bridge
+  providers — the claude-bridge provider gets a visible circular-delegation
+  error). It returns promptly with a stable job ID and takes
+  AskClaude-consistent `model`/`thinking` parameters plus `profile`, `task`,
+  and an optional reviewer `base`. A background job is another caller of the
+  shared delegation runner: it never enters AskClaude finalization, provider
+  `QueryContext`, shared-session synchronization, or MCP result routing. The
+  wiring lives behind a narrow injected adapter seam
+  (`registerSpawnClaudeAgent`), so registration, launch, and lifecycle cleanup
+  are unit-tested without launching Claude.
+- The launch honors the initiating tool call's `AbortSignal`: a call cancelled
+  before or during reviewer diff capture returns a visible error and starts no
+  detached job (and a spawn the manager would reject anyway skips diff capture
+  entirely). Once the job ID is returned, the job's own per-job
+  `AbortController` owns its lifecycle — the initiating call's signal plays no
+  further part.
+- `src/background-jobs.ts` owns the Pi-session-scoped lifecycle: one running
+  job per session (a second spawn throws and is promoted to a visible error
+  tool result, never queued — configurability deferred until dogfooding shows
+  a need), per-job `AbortController`, explicit first-wins terminal states
+  (`succeeded`, `failed`, `cancelled`, `abandoned`), bounded in-memory records
+  (20, oldest terminal evicted), and session shutdown/switch cleanup. Job IDs
+  are a collision-resistant random per-manager prefix (12 hex chars from Node
+  crypto) plus a monotonic counter (e.g. `claude-job-3f9c2d1a7b4e-1`): a new
+  extension runtime gets a new prefix, so cross-runtime collisions are
+  overwhelmingly unlikely, and a session reset never reuses an ID within one
+  manager. Shutdown and reset are
+  async — Pi 0.84.2 awaits `session_shutdown`/`session_start` handlers — so
+  they abort running jobs (the runner interrupts and closes the Claude Code
+  query) and wait up to a named 2-second grace
+  (`BACKGROUND_JOB_SHUTDOWN_GRACE_MS`) for settlement. A job that settles
+  inside the grace keeps its genuine terminal state (usually `cancelled`);
+  only jobs still unconfirmed when the grace expires are recorded as
+  `abandoned`, and a late settlement never rewrites a terminal state.
+  `abandoned` is a job-layer state only; `DelegationSnapshot` keeps its four
+  delegation statuses.
+- `src/agent-profiles.ts` holds the profiles as explicit data that select the
+  existing pure policy boundary: `explorer` and `reviewer` both resolve to the
+  read inventory (`Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`; no Bash,
+  mutation, or `Agent`) with distinct role prompts, and jobs always run
+  isolated. No profile carries its own policy code.
+- `src/reviewer-diff.ts` captures the reviewer's immutable status/diff artifact
+  at launch — by the extension, never by Claude. An explicit `base` diffs from
+  the merge base of `base` and HEAD to the launch-time working tree (branch/PR
+  semantics); without one it captures staged and unstaged changes from HEAD.
+  The artifact is bounded under named tested limits (40k diff / 4k status)
+  with visible truncation, best-effort redaction, and a recorded source;
+  non-git directories and invalid refs fail the spawn instead of yielding a
+  misleading empty diff. Launch cwd/context are captured immutably, and the
+  job prompt states honestly that Read/Glob/Grep see the live working tree
+  while the artifact stays frozen.
+- Job records reuse the retained/redacted `DelegationSnapshot`, and a job that
+  settles through the runner (succeeded/cancelled) also keeps the runner's
+  observed permission mode and non-sensitive managed-policy summary — bounded
+  facts, never raw policy rules — so Phase 3b can render the actual delegation
+  policy state without rerunning or inventing it; failed and abandoned jobs
+  record neither. There is no second event format, framework, persistence,
+  IPC, or Herdr backend.
 
-- **Reuse the delegation runner.** It already owns one Claude-native Agent SDK
-  query lifecycle and exposes cancellation without importing provider
-  `QueryContext` or MCP result routing. A background job is another caller of
-  that runner, not a fork of it.
-- **Reuse the normalized snapshot as the job record.** Retention caps, visible
-  truncation, and redaction already produce a bounded record suitable for a
-  TUI-only custom entry and a bounded model-visible message. Do not invent a
-  second background-job event format.
-- **Resolve policy through the existing pure options boundary.** Model, effort,
-  capability inventory, permission mode, settings sources, and child environment
-  come from there, and `isolated: true` stays unrepresentable together with
-  `resumeSessionId`. Profiles select inputs to that boundary; they do not gain
-  their own policy code.
-- **Keep the lanes apart.** Background lifecycle stays outside blocking
-  `AskClaude` finalization and outside provider `QueryContext`, shared-session
-  synchronization, and MCP tool-result routing. Background jobs get their own
-  lifecycle owner rather than reentering the AskClaude glue.
-- **Do not generalize.** Two read-only profiles and a session-scoped store do
-  not justify a profile/plugin framework, a generic event bus, a repository
-  layer, or a persistence abstraction.
+#### Phase 3b: background job UI and completion delivery — remaining
 
-First PR boundary — keep it small and reviewable without its UI: the in-process
-job manager and lifecycle state machine over the merged runner, plus
-`SpawnClaudeAgent` returning promptly with a job identifier, with `explorer` and
-`reviewer` capabilities enforced by explicit tool inventories, a launch-time
-context and working-directory snapshot, explicit terminal states (`succeeded`,
-`failed`, `cancelled`, `abandoned`), cancellation, and Pi session-shutdown
-cleanup covered by tests. Leave the sticky live-jobs widget, the TUI-only
-completion entry, the non-triggering model-visible completion message, and the
-human status/cancel commands to a second PR.
-
-Initial job-core decisions:
-
-- Allow one running background Claude job per Pi session. Reject a second spawn
-  visibly rather than silently queueing it; defer configurability until
-  dogfooding demonstrates a need and the process/quota cost is measured.
-- Give the `reviewer` a bounded repository status/diff artifact captured at job
-  launch. Claude receives the immutable artifact and no Bash capability. Support
-  an explicit comparison base for branch/PR review; without one, capture the
-  staged and unstaged working-tree change from `HEAD`. Truncation and the chosen
-  base must be visible in the job record so a reviewer cannot imply it saw
-  omitted or later edits.
-- Keep `Agent` out of both initial profile inventories. `SpawnClaudeAgent` is
-  already the concurrency boundary; nested agents add process fan-out and a
-  forwarding dependency before the basic job lifecycle is proven.
-- Give both `explorer` and `reviewer` explicit read/search inventories containing
-  `Read`, `Glob`, `Grep`, `WebFetch`, and `WebSearch`, with no Bash or mutation
-  tools. Their role prompts differ, and only `reviewer` receives the immutable
-  launch-time status/diff artifact.
-
-[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) merged as
-`111c40a` and completed the readiness boundary before the headless job-core PR.
-It pins the observed nested-`Agent` streaming contract and makes a signal already
-aborted at runner entry produce the normal cancelled outcome. The live probe
-permits Phase 3 to tree completed nested assistant messages, but does not prove
-nested tool events and forbids a dependency on token-level nested text for live
-status.
-
-The probe enables `Agent` and `forwardSubagentText` directly; neither is exposed
-by the current production options boundary, and the existing read inventory
-deliberately excludes `Agent`. If a Phase 3a profile is allowed to launch nested
-agents, add both capabilities deliberately through the pure options boundary and
-that profile's explicit inventory. Do not treat the probe as production wiring.
+- The sticky live-jobs widget and human status/cancel commands (the manager's
+  `cancel` contract exists and is tested; nothing invokes it yet).
+- Bounded completed-job details as a TUI-only custom entry.
+- One bounded non-triggering model-visible completion message using Pi
+  0.84.2's `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`.
+- The interactive AskClaude-overlay dogfooding checks listed under Phase 2,
+  plus live dogfooding of a real background job end-to-end.
 
 #### Deferred investigation: observable Herdr-backed Claude jobs
 
