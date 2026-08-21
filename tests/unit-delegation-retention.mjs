@@ -16,8 +16,7 @@ import {
 	retainText,
 	retainToolValue,
 } from "../src/delegation-retention.js";
-import { createDelegationSnapshot, reduceDelegationEvent } from "../src/delegation-events.js";
-import { retainDelegationSnapshot } from "../src/askclaude-ui.js";
+import { createDelegationSnapshot, reduceDelegationEvent, retainDelegationSnapshot } from "../src/delegation-events.js";
 
 describe("delegation retention", () => {
 	it("pins each independently adjustable retention choice", () => {

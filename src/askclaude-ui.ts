@@ -11,15 +11,11 @@
 
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
-import type { DelegationPermissionDenial, DelegationSnapshot, DelegationToolCall } from "./delegation-events.js";
+import { retainDelegationSnapshot, type DelegationPermissionDenial, type DelegationSnapshot, type DelegationToolCall } from "./delegation-events.js";
 import {
-	MODEL_RESULT_MAX_CHARS,
 	PROMPT_MAX_CHARS,
-	RETAINED_LIST_MAX_ITEMS,
-	THINKING_MAX_CHARS,
 	retainActionSummary,
 	retainText,
-	retainTextWithOmissions,
 } from "./delegation-retention.js";
 import { managedPolicyLabels, type ManagedPolicySummary, type PermissionObservation } from "./query-policy.js";
 
@@ -51,37 +47,6 @@ interface RenderResult {
 
 interface RenderContext {
 	lastComponent?: Component;
-}
-
-export function retainDelegationSnapshot(snapshot: DelegationSnapshot): DelegationSnapshot {
-	const tools = snapshot.tools ?? [];
-	const permissionDenials = snapshot.permissionDenials ?? [];
-	const diagnostics = snapshot.diagnostics ?? [];
-	const timeline = snapshot.timeline ?? [];
-	const toolsOmitted = Math.max(0, tools.length - RETAINED_LIST_MAX_ITEMS);
-	const denialsOmitted = Math.max(0, permissionDenials.length - RETAINED_LIST_MAX_ITEMS);
-	const diagnosticsOmitted = Math.max(0, diagnostics.length - RETAINED_LIST_MAX_ITEMS);
-	return {
-		...snapshot,
-		tools: tools.slice(-RETAINED_LIST_MAX_ITEMS),
-		toolsOmitted: (snapshot.toolsOmitted ?? 0) + toolsOmitted,
-		permissionDenials: permissionDenials.slice(-RETAINED_LIST_MAX_ITEMS),
-		permissionDenialsOmitted: (snapshot.permissionDenialsOmitted ?? 0) + denialsOmitted,
-		diagnostics: diagnostics.slice(-RETAINED_LIST_MAX_ITEMS),
-		diagnosticsOmitted: (snapshot.diagnosticsOmitted ?? 0) + diagnosticsOmitted,
-		timeline,
-		timelineOmitted: snapshot.timelineOmitted ?? 0,
-		responseText: retainTextWithOmissions(snapshot.responseText ?? "", MODEL_RESULT_MAX_CHARS, snapshot.responseOmittedChars ?? 0),
-		responseOmittedChars: 0,
-		resultText: snapshot.resultText === undefined
-			? undefined
-			: retainTextWithOmissions(snapshot.resultText, MODEL_RESULT_MAX_CHARS, snapshot.resultOmittedChars ?? 0),
-		resultOmittedChars: 0,
-		thinkingText: retainTextWithOmissions(snapshot.thinkingText ?? "", THINKING_MAX_CHARS, snapshot.thinkingOmittedChars ?? 0),
-		thinkingOmittedChars: 0,
-		error: snapshot.error ? retainText(snapshot.error, MODEL_RESULT_MAX_CHARS) : undefined,
-		retry: snapshot.retry ? { ...snapshot.retry, error: retainText(snapshot.retry.error, MODEL_RESULT_MAX_CHARS) } : undefined,
-	};
 }
 
 export function retainAskClaudePrompt(prompt: string): string {

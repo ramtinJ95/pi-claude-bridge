@@ -6,6 +6,7 @@ Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/
 
 1. **Provider** — Use Opus/Sonnet/Haiku as models in pi, with all tool calls flowing through pi's TUI
 2. **AskClaude tool** — Delegate tasks or questions to Claude Code when using another provider
+3. **SpawnClaudeAgent tool** — Start an independent background read-only Claude Code agent (exploration or code review) and keep working
 
 
 **FYI:** Anthropic [announced and then unannounced](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) a change to how you would be billed for tools that use the Agent SDK like this one. It currently uses your regular subscription quota just like Claude Code.
@@ -89,6 +90,59 @@ Keys while the overlay is focused: `↑`/`↓` or `j`/`k` scroll by line,
 `Home`/`End` jump, `1`-`9` jump to a section, `←`/`→` (or `p`/`n`) switch to the
 previous/next AskClaude call, and `q`, `Esc`, or `Ctrl+N` close.
 
+## SpawnClaudeAgent Tool
+
+Registered together with AskClaude (`askClaude.enabled: true`). Like AskClaude
+it is for non-claude-bridge providers only: when the active provider is
+claude-bridge the tool returns a visible error instead of delegating in a
+circle. Pi's LLM can start one independent background Claude Code agent and
+keep working: the tool returns immediately with a stable job ID (e.g.
+`claude-job-3f9c2d1a7b4e-1` — a collision-resistant random per-runtime prefix
+plus a counter, so ID collisions across extension reloads are overwhelmingly
+unlikely) instead of waiting for Claude to finish. The job runs
+through the same delegation engine as AskClaude, always in a fresh isolated
+read-only Claude session.
+
+### Parameters
+
+- **`task`** — the body of work. Include everything the agent needs; it has no
+  Pi conversation history.
+- **`profile`** — `explorer` (read-only repository/web exploration and
+  research) or `reviewer` (read-only code review of a repository diff captured
+  at launch). Both profiles are limited to Read, Glob, Grep, WebFetch, and
+  WebSearch — no Bash, no editing, no nested agents.
+- **`model`** / **`thinking`** — same semantics and defaults as AskClaude.
+- **`base`** — reviewer only: a git ref for branch/PR review. The captured diff
+  spans from the merge base of `base` and `HEAD` to the launch-time working
+  tree. Omit it to capture the staged and unstaged changes from `HEAD`.
+
+### Behavior and current limits
+
+- One background job runs per Pi session. A second spawn fails with a visible
+  error result; it is not queued.
+- The reviewer's status/diff artifact is captured by the extension at launch —
+  the job cannot take its own (no Bash). It is bounded under named limits (40k
+  chars of diff, 4k of status) with visible truncation markers and best-effort
+  credential redaction, and it records which base/source it compares. Invalid
+  refs and non-git directories fail the spawn instead of producing an empty
+  diff that would read as "no changes".
+- The diff artifact is frozen at launch, but the job's Read/Glob/Grep calls see
+  the live working tree, which may already contain later edits; the job's
+  prompt says so explicitly.
+- Cancelling the initiating tool call before the job ID is returned prevents
+  the launch entirely — no detached job is started. Once the job ID is
+  returned, the job's own lifecycle controls it; the original call's
+  cancellation no longer reaches it.
+- Jobs are session-scoped with bounded in-memory records only. On session
+  shutdown or switch, running jobs are aborted (interrupting their Claude Code
+  queries) and shutdown waits up to 2 seconds for them to confirm settlement.
+  A job that confirms in time keeps its genuine terminal state (usually
+  `cancelled`); only a job still unconfirmed after that grace period is
+  recorded as `abandoned`.
+- This phase ships the headless job core only: no status/result/cancel tools,
+  no live-jobs widget, and no delivery of the job's result back into the
+  conversation yet. Those arrive in a later phase.
+
 ## Configuration
 
 Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config directory, usually `.pi/claude-bridge.json` (project; merged over global).
@@ -113,7 +167,7 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 ```
 
 `askClaude`:
-- `enabled` — register the AskClaude tool (default `false`). If it's unset, the startup notice below points this out once.
+- `enabled` — register the AskClaude and SpawnClaudeAgent tools (default `false`). If it's unset, the startup notice below points this out once.
 - `name` — override the tool's pi-side name (default `"AskClaude"`)
 - `label` — override the TUI label (default `"Ask Claude Code"`)
 - `description` — override the tool description. Default when `allowFullMode: true`: *"Delegate to Claude Code for a second opinion or analysis (code review, architecture questions, debugging theories), or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. Prefer to handle straightforward tasks yourself."*

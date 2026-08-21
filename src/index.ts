@@ -32,13 +32,16 @@ import {
 	buildSnapshotActionSummary,
 	renderAskClaudeResult,
 	retainAskClaudePrompt,
-	retainDelegationSnapshot,
 	type AskClaudeResultDetails,
 } from "./askclaude-ui.js";
 import { assembleModelResult } from "./delegation-retention.js";
 import { buildDelegationQueryOptions } from "./delegation-options.js";
 import { runDelegation, type DelegationRunResult } from "./delegation-runner.js";
+import { AGENT_PROFILES, AGENT_PROFILE_IDS, buildAgentJobPrompt, type AgentProfile, type AgentProfileId } from "./agent-profiles.js";
+import { BackgroundJobLimitError, BackgroundJobManager, type BackgroundJobLaunch, type BackgroundJobRecord } from "./background-jobs.js";
+import { captureReviewerDiff, type ReviewerDiffArtifact } from "./reviewer-diff.js";
 import {
+	retainDelegationSnapshot,
 	sdkResultErrorText as resultErrorText,
 	type DelegationSnapshot,
 } from "./delegation-events.js";
@@ -765,6 +768,9 @@ export const __test = {
 	PROVIDER_HOOK_SUPPORT,
 	finalizeAskClaudeResult,
 	askClaudeResultIsError,
+	spawnClaudeAgentResultIsError,
+	spawnedJobResultText,
+	registerSpawnClaudeAgent,
 };
 
 // --- AskClaude result shaping ---
@@ -2005,6 +2011,250 @@ async function runAskClaudeDelegation(
 	return result;
 }
 
+// --- SpawnClaudeAgent: background jobs ---
+
+let spawnClaudeAgentToolName = "SpawnClaudeAgent";
+
+/** Bounded launch facts for the persisted spawn result — never the diff text itself. */
+interface SpawnClaudeAgentResultDetails {
+	jobId?: string;
+	profile?: AgentProfileId;
+	requestedModel?: string;
+	thinking?: string;
+	launchCwd?: string;
+	launchCapturedAt?: number;
+	diffSource?: string;
+	/** True when the launch artifact's diff or status text was truncated to its bound. */
+	diffArtifactTruncated?: boolean;
+	error?: boolean;
+}
+
+/**
+ * Promote a failed spawn to pi's `toolResult.isError`, exactly like
+ * `askClaudeResultIsError`: a rejected second spawn or a diff-capture failure
+ * must reach the model as an error result, not as a successful-looking answer.
+ */
+function spawnClaudeAgentResultIsError(
+	event: { toolName: string; isError: boolean; details?: unknown },
+): { isError: true } | undefined {
+	if (event.toolName !== spawnClaudeAgentToolName || event.isError) return undefined;
+	return (event.details as SpawnClaudeAgentResultDetails | undefined)?.error ? { isError: true } : undefined;
+}
+
+/**
+ * Run one background job through the shared delegation runner. Always a fresh
+ * isolated Claude session; the profile selects the read capability inventory
+ * through the same pure policy/options boundary AskClaude uses.
+ */
+function runBackgroundJobDelegation(input: {
+	prompt: string;
+	profile: AgentProfile;
+	requestedModel: string;
+	thinking?: string;
+	cwd: string;
+	signal: AbortSignal;
+	onSnapshot: (snapshot: DelegationSnapshot) => void;
+}): Promise<DelegationRunResult> {
+	const model = resolveModel(input.requestedModel);
+	const cliModel = model ? claudeCodeModelId(model, longContextSettings) : input.requestedModel;
+	const policy = resolveDelegationPolicy(input.profile.capabilityMode);
+	const effort = input.thinking && input.thinking !== "off"
+		? REASONING_TO_EFFORT[input.thinking] : undefined;
+	const resolved = buildDelegationQueryOptions({
+		policy,
+		cwd: input.cwd,
+		env: { ...process.env, ...CC_CHILD_ENV },
+		settings: { ...claudeCodeSettings(providerSettings), claudeMdExcludes: CLAUDE_MD_EXCLUDES },
+		cliModel,
+		effort,
+		pathToClaudeCodeExecutable: providerSettings.pathToClaudeCodeExecutable,
+		debugOptions: makeCliDebugOptions("spawnagent"),
+		isolated: true,
+	});
+	debug("spawnClaudeAgent:",
+		`profile=${input.profile.id} model=${input.requestedModel} cliModel=${cliModel}`,
+		`effort=${effort ?? "default"} permission=${resolved.policy.requestedPermissionMode} promptLen=${input.prompt.length}`);
+	return runDelegation({
+		prompt: input.prompt,
+		options: resolved.options,
+		requestedPermissionMode: resolved.policy.requestedPermissionMode,
+		signal: input.signal,
+		managedPolicy: observedManagedPolicy(input.cwd),
+		onSnapshot: input.onSnapshot,
+	});
+}
+
+function spawnedJobResultText(record: BackgroundJobRecord): string {
+	return [
+		`Started background Claude job ${record.id} (profile=${record.profile}, model=${record.requestedModel}${record.thinking ? `, thinking=${record.thinking}` : ""}).`,
+		`It runs in a fresh isolated read-only Claude session in ${record.launch.cwd} on context captured at launch${record.launch.diff ? ` (diff artifact: ${record.launch.diff.source})` : ""}.`,
+		"One background job runs per session; a second spawn fails until this one finishes.",
+		"This phase has no status, result, or cancel tools and does not deliver the job's result back to this conversation — do not wait for or poll it.",
+	].join(" ");
+}
+
+/** Injected effects for `registerSpawnClaudeAgent` — the seam unit tests replace all of them. */
+interface SpawnClaudeAgentDeps {
+	/** SpawnClaudeAgent shares AskClaude's opt-in; nothing registers when it is off. */
+	enabled: boolean;
+	jobs: BackgroundJobManager;
+	captureDiff: (input: { cwd: string; base?: string; capturedAt: number }) => Promise<ReviewerDiffArtifact>;
+	runJob: (input: {
+		prompt: string;
+		profile: AgentProfile;
+		requestedModel: string;
+		thinking?: string;
+		cwd: string;
+		signal: AbortSignal;
+		onSnapshot: (snapshot: DelegationSnapshot) => void;
+	}) => Promise<DelegationRunResult>;
+	cwd?: () => string;
+	now?: () => number;
+}
+
+/**
+ * Narrow adapter seam that wires SpawnClaudeAgent into Pi: tool registration,
+ * error-result promotion, and the session lifecycle cleanup of background
+ * jobs. Everything impure — the job manager, reviewer diff capture, background
+ * delegation, cwd, clock — arrives injected so the wiring is deterministic to
+ * test; production injects the real implementations from the extension entry.
+ *
+ * A background job is another caller of the shared delegation runner: the tool
+ * returns promptly with a job ID and never enters AskClaude finalization or
+ * provider QueryContext.
+ */
+function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">, deps: SpawnClaudeAgentDeps): void {
+	if (!deps.enabled) return;
+	const { jobs } = deps;
+	const cwdOf = deps.cwd ?? (() => process.cwd());
+	const now = deps.now ?? Date.now;
+
+	pi.on("tool_result", (event) => spawnClaudeAgentResultIsError(event));
+	// Background jobs are Pi-session-scoped. Both handlers are async and Pi
+	// 0.84.2 awaits them, so this cleanup — bounded by the manager's shutdown
+	// grace — really completes before the session is replaced or torn down;
+	// jobs that settle inside the grace keep their genuine terminal state and
+	// only unconfirmed ones are recorded as abandoned.
+	pi.on("session_start", async (event) => {
+		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
+			await jobs.reset();
+		}
+	});
+	pi.on("session_shutdown", async () => {
+		await jobs.shutdown();
+	});
+
+	const spawnClaudeAgentParams = Type.Object({
+		task: Type.String({ description: "The body of work for the background agent. Include everything it needs: it runs in a fresh isolated Claude session with no Pi conversation history and its result is not delivered back in this phase." }),
+		profile: StringEnum(AGENT_PROFILE_IDS, { description: '"explorer": read-only repository/web exploration and research. "reviewer": read-only code review of a repository diff captured at launch. Both are limited to Read, Glob, Grep, WebFetch, and WebSearch.' }),
+		model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
+		thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
+		base: Type.Optional(Type.String({ description: "Reviewer only: git ref to review against (branch/PR review). The captured diff spans the merge base of this ref and HEAD to the launch-time working tree. Omit to capture staged + unstaged changes from HEAD." })),
+	});
+	pi.registerTool<typeof spawnClaudeAgentParams>({
+		name: spawnClaudeAgentToolName,
+		label: "Spawn Claude Agent",
+		description: "Start an independent background Claude Code agent and continue working. Returns immediately with a job ID; the job runs in a fresh isolated read-only Claude session on context captured at launch. Only one background job runs per Pi session, jobs do not survive the session, and this phase has no status/result/cancel tools — the job's result is not delivered back to this conversation yet.",
+		parameters: spawnClaudeAgentParams,
+		renderCall(args, theme) {
+			let text = theme.fg("mdLink", theme.bold("SpawnClaudeAgent "));
+			const tags = [`profile=${args.profile}`];
+			if (args.model) tags.push(`model=${args.model}`);
+			if (args.thinking) tags.push(`thinking=${args.thinking}`);
+			if (args.base) tags.push(`base=${args.base}`);
+			text += `${theme.fg("accent", `[${tags.join(", ")}]`)} `;
+			const truncated = args.task.length > PREVIEW_MAX_CHARS ? args.task.substring(0, PREVIEW_MAX_CHARS) : args.task;
+			const lines = truncated.split("\n").slice(0, PREVIEW_MAX_LINES);
+			text += theme.fg("muted", `"${lines.join("\n")}"`);
+			if (args.task.length > PREVIEW_MAX_CHARS || args.task.split("\n").length > PREVIEW_MAX_LINES) text += theme.fg("dim", " …");
+			return new Text(text, 0, 0);
+		},
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const requestedModel = params.model ?? ASK_CLAUDE_DEFAULT_MODEL;
+			const profileId = params.profile as AgentProfileId;
+			const spawnError = (text: string): { content: { type: "text"; text: string }[]; details: SpawnClaudeAgentResultDetails } => ({
+				content: [{ type: "text" as const, text: assembleModelResult({ answer: `Error: ${text}` }) }],
+				details: { error: true, profile: profileId, requestedModel, thinking: params.thinking },
+			});
+
+			if (ctx.model?.baseUrl === "claude-bridge") {
+				debug("spawnClaudeAgent: blocked circular delegation (active provider is claude-bridge)");
+				return spawnError("SpawnClaudeAgent cannot be used when the active provider is claude-bridge — you're already running through Claude Code.");
+			}
+			const profile = AGENT_PROFILES[profileId];
+			if (params.base !== undefined && !profile.requiresDiffArtifact) {
+				return spawnError('The "base" parameter only applies to the reviewer profile.');
+			}
+			// The initiating tool call owns the launch: a cancelled call must not
+			// start a detached background job, and a spawn the manager would reject
+			// anyway must not pay for reviewer diff capture.
+			if (signal.aborted) {
+				debug("spawnClaudeAgent: tool call cancelled before launch");
+				return spawnError("SpawnClaudeAgent was cancelled before it launched anything; no background job was started.");
+			}
+			const alreadyRunning = jobs.running();
+			if (alreadyRunning) {
+				return spawnError(new BackgroundJobLimitError(alreadyRunning.id).message);
+			}
+
+			try {
+				const cwd = cwdOf();
+				const capturedAt = now();
+				// The extension captures the reviewer's diff at launch; the job never
+				// gets Bash to take its own. Capture failures (non-git directory,
+				// invalid base) must fail the spawn visibly here, not hand the
+				// reviewer an empty diff it would read as "no changes".
+				const diff = profile.requiresDiffArtifact
+					? await deps.captureDiff({ cwd, base: params.base, capturedAt })
+					: undefined;
+				// The capture awaited; the tool call may have been cancelled meanwhile.
+				if (signal.aborted) {
+					debug("spawnClaudeAgent: tool call cancelled during launch capture");
+					return spawnError("SpawnClaudeAgent was cancelled during launch capture; no background job was started.");
+				}
+				const launch: BackgroundJobLaunch = { cwd, capturedAt, ...(diff ? { diff } : {}) };
+				const prompt = buildAgentJobPrompt({ profile, task: params.task, launch });
+				// From here the job's own AbortController owns its lifecycle; the
+				// initiating tool call's signal deliberately plays no further part.
+				const record = jobs.spawn({
+					profile: profile.id,
+					task: params.task,
+					requestedModel,
+					thinking: params.thinking,
+					launch,
+					execute: (run) => deps.runJob({
+						prompt,
+						profile,
+						requestedModel,
+						thinking: params.thinking,
+						cwd,
+						signal: run.signal,
+						onSnapshot: run.onSnapshot,
+					}),
+				});
+				debug(`spawnClaudeAgent: started ${record.id} profile=${record.profile} diff=${diff ? diff.source : "none"}`);
+				return {
+					content: [{ type: "text" as const, text: spawnedJobResultText(record) }],
+					details: {
+						jobId: record.id,
+						profile: record.profile,
+						requestedModel: record.requestedModel,
+						thinking: record.thinking,
+						launchCwd: record.launch.cwd,
+						launchCapturedAt: record.launch.capturedAt,
+						...(diff ? { diffSource: diff.source, diffArtifactTruncated: diff.diffTruncated || diff.statusTruncated } : {}),
+					} satisfies SpawnClaudeAgentResultDetails,
+				};
+			} catch (err) {
+				if (!(err instanceof BackgroundJobLimitError)) {
+					debug(`spawnClaudeAgent error: profile=${profileId} model=${requestedModel}`, err);
+				}
+				return spawnError(errorMessage(err));
+			}
+		},
+	});
+}
+
 // --- Extension registration ---
 
 const PREVIEW_MAX_CHARS = 1000;
@@ -2025,6 +2275,13 @@ export default function (pi: ExtensionAPI) {
 		longContextExtraUsage: providerSettings.longContextExtraUsage ?? false,
 	};
 	const registeredModels = applyLongContext(MODELS, longContextSettings);
+
+	// Session-scoped background Claude jobs (SpawnClaudeAgent). One manager per
+	// extension runtime, each with its own collision-resistant random job-ID
+	// prefix, so records from before and after a /reload are overwhelmingly
+	// unlikely to collide; the session lifecycle cleanup is wired inside
+	// registerSpawnClaudeAgent.
+	const backgroundJobs = new BackgroundJobManager({ onDebug: debug });
 
 	if (!config.startupNoticeShown) {
 		if (config.provider?.plan === undefined) pendingNotices.push('Are you using a Max plan? You need to set provider.plan to "max" to unlock 1M context in Opus.');
@@ -2350,4 +2607,16 @@ export default function (pi: ExtensionAPI) {
 			},
 		});
 	}
+
+	// --- SpawnClaudeAgent tool ---
+	//
+	// Registered under the same opt-in as AskClaude: these are the only two
+	// first-class Claude tools the fork exposes. The adapter seam also wires the
+	// background jobs' session lifecycle cleanup (async, awaited by Pi 0.84.2).
+	registerSpawnClaudeAgent(pi, {
+		enabled: Boolean(askConf?.enabled),
+		jobs: backgroundJobs,
+		captureDiff: captureReviewerDiff,
+		runJob: runBackgroundJobDelegation,
+	});
 }

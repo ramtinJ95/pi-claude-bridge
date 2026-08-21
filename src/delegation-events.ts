@@ -8,12 +8,14 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
 	MODEL_RESULT_MAX_CHARS,
+	RETAINED_LIST_MAX_ITEMS,
 	THINKING_MAX_CHARS,
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_EVENTS,
 	TOOL_FIELD_MAX_CHARS,
 	appendRetainedText,
 	retainText,
+	retainTextWithOmissions,
 	retainToolValue,
 } from "./delegation-retention.js";
 
@@ -513,6 +515,43 @@ export function reduceDelegationMessage(
 ): DelegationSnapshot {
 	return normalizeDelegationMessage(message, at)
 		.reduce((current, event) => reduceDelegationEvent(current, event), snapshot);
+}
+
+/**
+ * Fit one delegation snapshot inside the retained per-field and per-list caps
+ * so it is safe to persist or hold in a bounded in-memory record. Truncation
+ * stays visible: text fields carry an accurate omission marker and list
+ * omissions are counted rather than silently dropped.
+ */
+export function retainDelegationSnapshot(snapshot: DelegationSnapshot): DelegationSnapshot {
+	const tools = snapshot.tools ?? [];
+	const permissionDenials = snapshot.permissionDenials ?? [];
+	const diagnostics = snapshot.diagnostics ?? [];
+	const timeline = snapshot.timeline ?? [];
+	const toolsOmitted = Math.max(0, tools.length - RETAINED_LIST_MAX_ITEMS);
+	const denialsOmitted = Math.max(0, permissionDenials.length - RETAINED_LIST_MAX_ITEMS);
+	const diagnosticsOmitted = Math.max(0, diagnostics.length - RETAINED_LIST_MAX_ITEMS);
+	return {
+		...snapshot,
+		tools: tools.slice(-RETAINED_LIST_MAX_ITEMS),
+		toolsOmitted: (snapshot.toolsOmitted ?? 0) + toolsOmitted,
+		permissionDenials: permissionDenials.slice(-RETAINED_LIST_MAX_ITEMS),
+		permissionDenialsOmitted: (snapshot.permissionDenialsOmitted ?? 0) + denialsOmitted,
+		diagnostics: diagnostics.slice(-RETAINED_LIST_MAX_ITEMS),
+		diagnosticsOmitted: (snapshot.diagnosticsOmitted ?? 0) + diagnosticsOmitted,
+		timeline,
+		timelineOmitted: snapshot.timelineOmitted ?? 0,
+		responseText: retainTextWithOmissions(snapshot.responseText ?? "", MODEL_RESULT_MAX_CHARS, snapshot.responseOmittedChars ?? 0),
+		responseOmittedChars: 0,
+		resultText: snapshot.resultText === undefined
+			? undefined
+			: retainTextWithOmissions(snapshot.resultText, MODEL_RESULT_MAX_CHARS, snapshot.resultOmittedChars ?? 0),
+		resultOmittedChars: 0,
+		thinkingText: retainTextWithOmissions(snapshot.thinkingText ?? "", THINKING_MAX_CHARS, snapshot.thinkingOmittedChars ?? 0),
+		thinkingOmittedChars: 0,
+		error: snapshot.error ? retainText(snapshot.error, MODEL_RESULT_MAX_CHARS) : undefined,
+		retry: snapshot.retry ? { ...snapshot.retry, error: retainText(snapshot.retry.error, MODEL_RESULT_MAX_CHARS) } : undefined,
+	};
 }
 
 /**
