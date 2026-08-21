@@ -103,6 +103,31 @@ describe("delegation runner", () => {
 		assert.ok(hooks.closes >= 1);
 	});
 
+	it("reports a pre-aborted signal as cancelled without starting an SDK query", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const snapshots = [];
+		let queryStarted = false;
+
+		const result = await runDelegation({
+			prompt: "question",
+			options: {},
+			requestedPermissionMode: "auto",
+			signal: controller.signal,
+			queryFactory: () => {
+				queryStarted = true;
+				return fakeQuery([]);
+			},
+			onSnapshot: (snapshot) => snapshots.push(snapshot),
+		});
+
+		assert.equal(queryStarted, false);
+		assert.equal(result.stopReason, "cancelled");
+		assert.equal(result.snapshot.status, "cancelled");
+		assert.equal(result.messageCount, 0);
+		assert.equal(snapshots.at(-1).status, "cancelled");
+	});
+
 	it("closes the query when interrupt rejects and still reports cancellation", async () => {
 		const controller = new AbortController();
 		const hooks = { interrupts: 0, closes: 0 };

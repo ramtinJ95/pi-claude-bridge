@@ -277,6 +277,72 @@ test("includePartialMessages yields the stream_event shapes processStreamEvent d
 	}
 });
 
+test("forwardSubagentText parents completed subagent messages but emits no nested partial frames", { timeout: 120_000 }, async () => {
+	// Background-job rendering needs to know which nested output is available
+	// live. On the installed SDK/CLI, forwardSubagentText forwards completed
+	// assistant messages with the Agent tool_use parent, but includePartialMessages
+	// does not extend to the child stream. Pin both halves so Phase 3 neither
+	// flattens completed child output nor promises token-level nested text.
+	const agentToolUseIds = new Set();
+	const nestedPartialParents = new Set();
+	const nestedAssistantParents = new Set();
+	let nestedAssistantText = "";
+
+	for await (const message of query({
+		prompt: "Use the probe-child Agent exactly once. Ask it to reply with the exact marker NESTED-PARTIAL-PROBE. After it returns, reply only PARENT-DONE without repeating the child marker.",
+		options: {
+			cwd: CWD,
+			model: MODEL,
+			tools: ["Agent"],
+			allowedTools: ["Agent"],
+			permissionMode: "auto",
+			includePartialMessages: true,
+			forwardSubagentText: true,
+			agents: {
+				"probe-child": {
+					description: "Deterministic contract-test child that returns the requested marker.",
+					prompt: "Reply with exactly the marker requested by the parent. Do not use tools.",
+					tools: [],
+					model: MODEL,
+					maxTurns: 1,
+				},
+			},
+			maxTurns: 4,
+			persistSession: false,
+			env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" },
+			extraArgs: { "strict-mcp-config": null },
+		},
+	})) {
+		if (message.type === "assistant") {
+			if (message.parent_tool_use_id) {
+				nestedAssistantParents.add(message.parent_tool_use_id);
+				for (const block of message.message?.content ?? []) {
+					if (block.type === "text") nestedAssistantText += block.text;
+				}
+			}
+			for (const block of message.message?.content ?? []) {
+				if (block.type === "tool_use" && block.name === "Agent" && !message.parent_tool_use_id) {
+					agentToolUseIds.add(block.id);
+				}
+			}
+		}
+		if (message.type === "stream_event" && message.parent_tool_use_id) {
+			nestedPartialParents.add(message.parent_tool_use_id);
+		}
+	}
+
+	assert.ok(agentToolUseIds.size > 0, "Claude never invoked the configured probe-child Agent");
+	assert.ok(nestedAssistantParents.size > 0, "Claude emitted no completed nested assistant message");
+	for (const parent of nestedAssistantParents) {
+		assert.ok(agentToolUseIds.has(parent),
+			`nested assistant parent ${parent} matches no top-level Agent invocation: ${JSON.stringify([...agentToolUseIds])}`);
+	}
+	assert.match(nestedAssistantText, /NESTED-PARTIAL-PROBE/,
+		`the completed nested assistant message omitted the marker: ${JSON.stringify(nestedAssistantText)}`);
+	assert.deepEqual([...nestedPartialParents], [],
+		`nested partial frames are now available; Phase 3 can deliberately add live nested-text rendering for parents ${JSON.stringify([...nestedPartialParents])}`);
+});
+
 test("a streamed prompt keeps the query open past result until the input generator ends", { timeout: 120_000 }, async () => {
 	// Passing an AsyncIterable makes isSingleUserTurn false, so the SDK no longer
 	// closes the CLI's stdin on the first result. That parked generator is what

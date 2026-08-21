@@ -372,18 +372,23 @@ budget.
 
 Open Phase 2 runtime edges are deliberately visible:
 
-- A signal already aborted before runner entry still takes the generic error
-  path rather than cancellation.
 - The Pi `tool_result` promotion of AskClaude cancellation/error details is
   unit-tested but has not had an end-to-end live cancellation exercise.
-- Whether nested Agent partial events carry the expected parent relation needs
-  a live `tests/int-cc-contracts.mjs` probe before Phase 3 depends on it.
 - Expanded rendering performance should be measured before adding caching.
 - Oversized tool input labels honestly degrade to visibly truncated JSON.
 
-#### Phase 2 dogfooding follow-up: AskClaude details overlay — PR #6 open
+The Phase 3 readiness work settles two former edges: a signal already aborted
+before runner entry returns the normal cancelled outcome without creating an SDK
+query, and a live `tests/int-cc-contracts.mjs` probe establishes that completed
+nested Agent assistant messages carry their parent tool-use ID. The installed
+SDK/Claude Code emits no nested token-level partial stream frames even with
+`forwardSubagentText` and partial messages enabled. Nested tool parenting remains
+covered by synthetic reducer tests, not this live probe.
 
-[PR #6](https://github.com/ramtinJ95/pi-claude-bridge/pull/6) adds the missing
+#### Phase 2 dogfooding follow-up: AskClaude details overlay — PR #6 merged
+
+[PR #6](https://github.com/ramtinJ95/pi-claude-bridge/pull/6) merged as
+`cd71dab`. It adds the missing
 deep-inspection surface found during dogfooding. `/askclaude-details` and
 `ctrl+n` open one centered, scrollable Pi overlay for the latest or a prior
 AskClaude call. Its pinned header uses only Claude delegation data—runtime model,
@@ -429,10 +434,11 @@ still a dogfooding check because the harness has no live TUI driver:
 worktree directly. This path is local machine state, not a repository or
 packaging requirement.
 
-### Phase 3: background job core — next, after the Phase 2 follow-up ships
+### Phase 3: background job core — next after interactive overlay dogfooding
 
-Do not start Phase 3 until the AskClaude details overlay follow-up above is
-reviewed, merged, and its dogfooding checks have been exercised.
+The AskClaude details overlay is reviewed and merged. Exercise its interactive
+dogfooding checks above before merging the background job core; implementation
+readiness work that does not depend on those TUI results can proceed meanwhile.
 
 - Implement the job manager and lifecycle state machine.
 - Add `SpawnClaudeAgent` with `explorer` and `reviewer` profiles.
@@ -477,10 +483,59 @@ cleanup covered by tests. Leave the sticky live-jobs widget, the TUI-only
 completion entry, the non-triggering model-visible completion message, and the
 human status/cancel commands to a second PR.
 
-Two Phase 2 deferrals become load-bearing here and should be settled early: the
-live subagent partial-stream probe, since nested `Agent` relations decide whether
-background jobs can be rendered as a tree, and the pre-aborted-signal edge, since
-a job manager will cancel work it did not launch on the current call stack.
+Initial job-core decisions:
+
+- Allow one running background Claude job per Pi session. Reject a second spawn
+  visibly rather than silently queueing it; defer configurability until
+  dogfooding demonstrates a need and the process/quota cost is measured.
+- Give the `reviewer` a bounded repository status/diff artifact captured at job
+  launch. Claude receives the immutable artifact and no Bash capability. Support
+  an explicit comparison base for branch/PR review; without one, capture the
+  staged and unstaged working-tree change from `HEAD`. Truncation and the chosen
+  base must be visible in the job record so a reviewer cannot imply it saw
+  omitted or later edits.
+
+[PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) is the small
+readiness PR before the headless job-core PR. It pins the observed nested-`Agent`
+streaming contract and makes a signal already aborted at runner entry produce
+the normal cancelled outcome. The live probe permits Phase 3 to tree completed
+nested assistant messages, but does not prove nested tool events and forbids a
+dependency on token-level nested text for live status. Keep this PR free of
+job-manager or UI architecture.
+
+The probe enables `Agent` and `forwardSubagentText` directly; neither is exposed
+by the current production options boundary, and the existing read inventory
+deliberately excludes `Agent`. If a Phase 3a profile is allowed to launch nested
+agents, add both capabilities deliberately through the pure options boundary and
+that profile's explicit inventory. Do not treat the probe as production wiring.
+
+#### Deferred investigation: observable Herdr-backed Claude jobs
+
+Investigate, after the in-process `SpawnClaudeAgent` job core works, whether an
+explicit alternate execution mode can launch Claude Code in a user-visible Herdr
+pane. The product goal is observability: the user can watch Claude's native
+session while Pi still receives a job identifier, lifecycle state, cancellation,
+and a bounded final result. It is not part of the readiness or initial job-core
+PR and must not make Herdr a required dependency.
+
+The probe must establish rather than assume that a Pi session running inside
+Herdr can:
+
+- create a background pane without stealing focus and preserve the captured cwd;
+- start the installed Claude agent kind with an explicit model and thinking
+  level, then submit the captured body of work;
+- observe working, blocked, completed, and unknown states and obtain a reliable
+  bounded result rather than scraping an incomplete alternate-screen viewport;
+- cancel and clean up only the pane/job it owns; and
+- preserve the same profile capability guarantees, managed-policy behavior,
+  retention/redaction boundaries, and visible terminal-state semantics as the
+  Agent SDK backend.
+
+Treat this as a deliberate backend choice, never a silent fallback. If Pi is not
+running inside Herdr, the mode must be visibly unavailable. Decide from the probe
+whether Herdr is merely an optional observable frontend for the same job contract
+or too lifecycle-ambiguous to support. Do not replace the structured Agent SDK
+path solely to gain terminal visibility.
 
 ### Phase 4: dynamic lifecycle tools
 
