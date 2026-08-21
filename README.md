@@ -52,12 +52,38 @@ You could also create skills or add something to AGENTS.md to e.g. "Always call 
 - **`isolated`** — when `true`, Claude gets a fresh conversation with no Pi history or persisted Claude session (default: `true`). This is conversation isolation, not a hermetic process: working-directory access, settings, sandbox, and managed policy still apply.
 
 While a call runs, AskClaude streams Claude's response and a compact tool/action
-summary into one Pi tool row. Expand the row to inspect emitted thinking
-summaries, nested tool inputs/outputs and durations, the retained event timeline,
-usage/cost, session metadata, and observed permission or managed-policy state.
-This is emitted summary text, not private chain-of-thought. Persisted display
+summary into one Pi tool row. Expand the row for the prompt, emitted thinking
+summaries, a grouped action summary with one aggregate tool-status line,
+usage/cost, session metadata, observed permission or managed-policy state, and
+the authoritative response. Per-tool inputs/outputs, durations, nesting, and the
+retained event timeline live only in the details overlay below, not inline.
+Thinking is emitted summary text, not private chain-of-thought. Persisted display
 details use bounded fields, visible truncation, and best-effort credential
 redaction; the model-facing result is separately capped at about 16k characters.
+
+### Details overlay
+
+For deep inspection beyond the inline row, `/askclaude-details` opens a centered
+overlay with the latest AskClaude call (`/askclaude-details 2` opens call #2);
+`Ctrl+N` toggles the same overlay. Calls are read from the current session
+branch, so completed calls stay inspectable after a session resume, and the
+latest call updates live while it runs.
+
+The pinned header shows only what the Claude delegation itself reported —
+runtime model, tokens/cache/cost/turns, Claude session ID, Claude working
+directory, runtime permission mode, status, capability, isolation, and requested
+thinking level. Values the delegation did not report read `unavailable` rather
+than borrowing anything from the active Pi session. The scrollable body shows
+the full original prompt (from the persisted tool-call arguments), the emitted
+thinking summary, retained nested tools with inputs/outputs/durations/status,
+the retained timeline, and the authoritative response. Tool outputs and lists
+remain subject to the same retained limits as the inline row — truncation and
+omission notices are shown as persisted, not re-expanded.
+
+Keys while the overlay is focused: `↑`/`↓` or `j`/`k` scroll by line,
+`PgUp`/`PgDn` (including your configured select-page bindings) by page,
+`Home`/`End` jump, `1`-`9` jump to a section, `←`/`→` (or `p`/`n`) switch to the
+previous/next AskClaude call, and `q`, `Esc`, or `Ctrl+N` close.
 
 ## Configuration
 
