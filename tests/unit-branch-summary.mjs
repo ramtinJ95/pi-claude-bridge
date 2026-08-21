@@ -16,6 +16,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import { clearLiveAskClaudeCall, getLiveAskClaudeCall, updateLiveAskClaudeCall } from "../src/askclaude-overlay.js";
+
 const { default: activate, __test } = await import("../src/index.js");
 
 function activateWithMockPi() {
@@ -24,6 +26,8 @@ function activateWithMockPi() {
 		on: (event, handler) => handlers.set(event, handler),
 		registerProvider: () => {},
 		registerTool: () => {},
+		registerCommand: () => {},
+		registerShortcut: () => {},
 	});
 	return handlers;
 }
@@ -51,6 +55,16 @@ describe("branch summarization takeover", () => {
 
 		assert.equal(await handler(treeEvent({ ...preparation, userWantsSummary: false }), ctx), undefined);
 		assert.equal(await handler(treeEvent({ ...preparation, entriesToSummarize: [] }), ctx), undefined);
+	});
+
+	it("clears the live AskClaude slot when session-tree navigation changes the active branch", () => {
+		clearLiveAskClaudeCall();
+		updateLiveAskClaudeCall({ toolCallId: "removed-call", startedAt: 1, prompt: "p", details: { prompt: "p" } });
+		assert.equal(getLiveAskClaudeCall()?.toolCallId, "removed-call");
+
+		activateWithMockPi().get("session_tree")();
+
+		assert.equal(getLiveAskClaudeCall(), null);
 	});
 });
 

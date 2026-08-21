@@ -337,244 +337,102 @@ by tests:
 
 ### Phase 0: establish the fork baseline — complete
 
-**Completed in [PR #2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2).**
-The fork now requires Pi 0.84.2 and Node.js 22.19, pins matching Pi development
-packages, runs its test harnesses against the repository-local Pi CLI, records
-the installed Pi/Agent SDK/bundled Claude Code versions, and has an offline
-extension-load/provider-registration smoke test. The provider lifecycle-hook
-adapter gap is explicitly documented and guarded by characterization tests; no
-payload or HTTP response data is fabricated.
-
-Phase 0 validation passed typecheck, package dry-run, the real Pi load smoke,
-and all 200 unit tests. The remaining tool-heavy live-test failures on the
-current workstation are the known managed-policy interaction with the existing
-hard-coded `bypassPermissions` mode. Phase 1 replaced that request with
-configurable `auto`; the organization policy still restricts provider MCP tools,
-now deliberately and visibly rather than as an adapter accident.
-
-- Run the existing unit suite and typecheck unchanged.
-- Raise the supported Pi baseline to 0.84.2 and pin matching development
-  dependencies.
-- Add a Pi 0.84.2 extension-load/provider-registration smoke test.
-- Record the installed Agent SDK and Claude Code versions used by integration
-  tests.
-- Characterize Pi 0.84's `onPayload`/`onResponse` provider-hook behavior for the
-  Agent-SDK-backed provider; record any unavoidable limitation explicitly and
-  never fake an HTTP response.
-- Add characterization tests before changing undocumented session behavior.
+Completed in [PR #2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2).
+The fork requires Pi 0.84.2 and Node.js 22.19, tests against matching Pi
+packages, records Agent SDK/Claude Code versions, and explicitly documents the
+provider lifecycle-hook gap without fabricating payload or HTTP response data.
 
 ### Phase 1: correctness and policy semantics — complete
 
-**Completed in [PR #3](https://github.com/ramtinJ95/pi-claude-bridge/pull/3),
-merged as `1754acc`.** Capability and permission policy are now separate;
-provider, compaction, and delegation queries use configurable `auto` by default;
-and AskClaude defaults to structural read capability in a fresh isolated
-conversation. Read and none use explicit model-callable tool inventories, with
-nested `Agent` excluded from read mode. The TUI and bounded model-facing result
-surface requested/runtime permission differences, denials, and non-sensitive
-managed-policy constraints the Agent SDK can actually attribute.
+Completed in [PR #3](https://github.com/ramtinJ95/pi-claude-bridge/pull/3),
+merged as `1754acc`. Capability and permission policy are separate; provider,
+compaction, and delegation queries use configurable `auto` by default; and
+AskClaude defaults to structural read capability in a fresh isolated session.
+Requested/runtime permission differences, denials, and observable managed-policy
+constraints remain visible. Managed policy still wins: this machine currently
+forces runtime `default`, requires sandboxing, and may deny provider MCP tools
+until an administrator grants their exact aliases.
 
-Phase 1 validation passed typecheck, package dry-run, all 211 unit tests, and the
-live Agent SDK contract suite (17 passed, one environment-dependent skip). A
-Fable/high review found no high-severity or security-critical issues. Accepted
-review fixes clarified provider-denial remediation and the deliberate rejection
-of blanket `allowedTools`, removed an avoidable provider-init wait, distinguished
-requested from observed permission rendering, strengthened source-wide policy
-tripwires, and corrected an integration-test claim.
+### Phase 2: normalized events and richer blocking UI — complete
 
-- Preserve PR #1's effective-default contract while changing fork defaults to
-  `read` and `isolated: true`.
-- Separate capability mode from permission mode.
-- Default both provider and delegation paths to `auto` permission mode.
-- Add configuration and tests for permission mode.
-- Show the effective requested mode and managed-policy constraints where
-  observable.
+Completed in [PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4)
+(`5b5740a`) and [PR #5](https://github.com/ramtinJ95/pi-claude-bridge/pull/5)
+(`7c80a88`). The delegation lane now has a provider-independent Agent SDK runner,
+pure policy/options boundary, normalized snapshot, explicit terminal states, and
+bounded live/final AskClaude rendering. The provider remains on its specialized
+`QueryContext`/MCP/session path.
 
-Live Phase 1 characterization on the current workstation shows that requesting
-`auto` is changed by Claude Code to runtime `default`. The Agent SDK settings
-resolver attributes the relevant constraints to a managed macOS plist: sandbox
-is required, unsandboxed commands and bypass mode are disabled, only managed
-permission rules may grant access, and managed network/read restrictions apply.
-As a result, provider MCP tools remain denied unless organization policy permits
-them. The bridge must report this state; it must not install a `canUseTool`
-callback or other host-side override merely to make the provider appear to work.
-It also deliberately does not pass every Pi MCP alias through the SDK's
-`allowedTools`: that would auto-approve the provider's whole tool inventory on
-unmanaged machines and make `provider.permissionMode` nominal. Users may grant
-specific aliases such as `mcp__custom-tools__read` in Claude permission settings;
-when managed permission rules are exclusive, an administrator must make that
-grant.
+The retained AskClaude record uses named, independently tested limits rather
+than a persistence promise: about 16k characters for the model-facing result,
+2k per tool input/output, 32k/100 timeline events, 4k thinking summary, and
+bounded retained lists. Truncation is visible; credential redaction is
+best-effort. The authoritative SDK result wins over streamed narration, terminal
+errors remain visible, and policy annotations survive the total model-result
+budget.
 
-Deferred, non-blocking review cleanup remains available for later opportunistic
-work: retry a transient managed-settings resolution failure instead of caching
-`undefined` for the process lifetime; simplify typed result-denial access and UI
-permission resolution; and clarify the compatibility reason for probing both
-managed read-path key locations. These are not prerequisites for Phase 2.
+Open Phase 2 runtime edges are deliberately visible:
 
-### Phase 2: normalized events and richer blocking UI — in progress
+- A signal already aborted before runner entry still takes the generic error
+  path rather than cancellation.
+- The Pi `tool_result` promotion of AskClaude cancellation/error details is
+  unit-tested but has not had an end-to-end live cancellation exercise.
+- Whether nested Agent partial events carry the expected parent relation needs
+  a live `tests/int-cc-contracts.mjs` probe before Phase 3 depends on it.
+- Expanded rendering performance should be measured before adding caching.
+- Oversized tool input labels honestly degrade to visibly truncated JSON.
 
-- Extract pure query options, the delegation runner, and the normalized event
-  model without routing the provider through that runner.
-- Capture tool results, usage, session metadata, and emitted thinking summaries.
-- Replace the lightweight `AskClaude` status line with expandable live details.
-- Use Pi 0.84's themed Markdown and stateful tool-row rendering rather than a
-  parallel rendering framework.
-- Keep final model-facing output bounded.
+#### Phase 2 dogfooding follow-up: AskClaude details overlay — PR #6 open
 
-Deliver Phase 2 as two independently reviewable PRs:
+[PR #6](https://github.com/ramtinJ95/pi-claude-bridge/pull/6) adds the missing
+deep-inspection surface found during dogfooding. `/askclaude-details` and
+`ctrl+n` open one centered, scrollable Pi overlay for the latest or a prior
+AskClaude call. Its pinned header uses only Claude delegation data—runtime model,
+SDK usage/cost/turns, Claude session/cwd, runtime permission, status, capability,
+isolation, and requested thinking—with no Pi metadata fallback. The body shows
+the original persisted prompt, emitted thinking summary, retained nested tools,
+retained timeline, and authoritative response.
 
-1. **Delegation engine and normalized events — complete in
-   [PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4).** Extract delegation query
-   options and one Claude-native runner, normalize the SDK stream into a stable
-   snapshot, and replace `promptAndWait` while preserving the existing
-   `AskClaude` UI and model-facing behavior. Characterize fixture replay,
-   tool-result matching, usage, unknown events, cancellation, and cleanup. The
-   provider must remain outside this runner.
-2. **Rich `AskClaude` observability — implemented on
-   `phase-2-askclaude-observability`, pending review and merge.** Delegation now
-   requests partial SDK messages and publishes throttled Pi partial updates from
-   the same retained snapshot used by the final result. The Pi 0.84 stateful tool
-   row has compact and expanded themed views for streaming response text,
-   emitted thinking summaries, nested tools, inputs/results/durations, timeline,
-   usage/cost, model/session/cwd, capability, isolation, permission denials,
-   retries, rate limits, and observed managed-policy state. Named limits bound
-   model output, prompt/thinking/tool fields, timeline, and retained lists;
-   truncation is visible and persisted display details receive best-effort
-   credential redaction.
+The inline expanded row is intentionally concise: Claude metadata, policy and
+error state, prompt/thinking/response, one grouped action summary, and aggregate
+tool counts. Per-tool inputs/outputs/durations/nesting and lifecycle events live
+only in the overlay. This keeps the transcript readable without changing what
+the retained snapshot stores.
 
-For the second PR, prefer a small retained record: approximately 16k characters
-for the model-facing answer, 2k per tool input or output, 32k/100 events for the
-retained timeline, and 4k for emitted thinking summaries. Keep these as named,
-independently tested constants rather than persistence-format promises.
+Implementation boundaries remain narrow:
 
-PR #4's implementation and validation are complete: typecheck, package dry-run,
-and all 243 unit tests pass. The live Agent SDK contract suite passed before the
-final review round (17 passed, one environment-dependent skip) and was not rerun
-because the final changes add no new undocumented SDK behavior assumption. A
-Fable/high AskClaude review found two blockers and four non-blocking items. The
-cancellation and resumed-session replay blockers were fixed, as were
-failed-snapshot fallback text, single policy resolution, and result-helper type
-narrowing.
+- `askclaude-details.ts` extracts view models from real branch tool-call/result
+  records, including a configured custom AskClaude name and restored sessions.
+- `askclaude-overlay.ts` owns the component, command/shortcut registration, and
+  one bounded in-memory live slot. It is not a general viewer framework and
+  Phase 3 does not depend on it.
+- The live slot receives the same retained/redacted details used by the inline
+  row, is shadowed by the persisted result, replaced by the next call, and
+  cleared on session change/shutdown.
 
-A final Opus review produced these accepted fixes:
+The repository tests completed-call extraction, navigation, Claude-only
+metadata, scrolling, responsive rendering, live-store merge/cleanup, and the
+inline/overlay division. Interactive behavior while blocking AskClaude runs is
+still a dogfooding check because the harness has no live TUI driver:
 
-- **Cancellation is terminal and model-visible.** `runDelegation` still resolves
-  on cancellation so partial work survives, but the AskClaude glue now finalizes
-  that into a result that says it was cancelled, keeps the partial answer and
-  action summary, and carries `cancelled`/`error` details. Pi's
-  `AgentToolResult` has no `isError` field — only a throw sets it, and a throw
-  discards details — so a `tool_result` hook promotes those details to the real
-  `toolResult.isError`.
-- **A missing result is a failure.** The runner tracks whether an authoritative
-  SDK `result` arrived. An iterator that ends without one, and without an abort,
-  publishes a failed snapshot and throws instead of reporting success; an
-  assistant error seen earlier becomes the failure text.
-- **`SDKAssistantMessage.error` is preserved** as an `assistant_error` event and
-  snapshot field. It does not end the run on its own, since an authoritative
-  result may still follow.
-- **`parent_tool_use_id` is preserved** as `parentToolUseId` on normalized
-  tool events and tool records. The `tool_use` frame is authoritative for the
-  subagent relation; progress and result frames may only fill it in, never
-  flatten it. The UI stays flat for now.
-- **Diagnostics say `unhandled_sdk_message`, not `unknown`.** The SDK documents
-  many more frames than delegation consumes; a brittle ignore list was rejected
-  in favor of a name that only claims this reducer did not handle the frame.
-- **`isolated: true` with `resumeSessionId` is unrepresentable** through a
-  discriminated union, with the caller branching rather than casting.
-- Terminal lifecycle ownership stays in `runDelegation`: the reducer cannot infer
-  iterator completion, so a snapshot stays `running` until the runner finalizes
-  it.
+- Open and close with both `ctrl+n` and `/askclaude-details` during a running
+  call; confirm live updates and no focus leak.
+- Exercise regular/fullscreen modes and a small terminal.
+- Confirm the documented Pi 0.84.2 `ctrl+n` session-picker overlap is acceptable
+  in practice; the extension owns it in the main editor but Pi may show a
+  startup warning.
+- Resume a session and inspect earlier AskClaude calls.
 
-Enabling and documenting partial SDK messages is intentionally deferred to the
-rich-observability PR, where live streaming becomes user-visible and can be
-tested with its renderer. So are rich tool-row rendering, nested/subagent tree
-display, retention caps, visible truncation, and redaction.
+#### Local dogfooding state — this workstation only
 
-The Phase 2 PR 2 implementation started from the merged delegation runner and
-event snapshot rather than reopening its provider/session boundaries. It first
-enabled and characterized `includePartialMessages`, then drove Pi partial updates
-and final rendering from the same snapshot. Two small runtime edges
-remain visible rather than silently declared solved: a signal already aborted
-before runner entry still takes the generic error path, and the Pi 0.84.2
-`tool_result` hook that promotes AskClaude cancellation/error details to
-`toolResult.isError` is source-verified and unit-tested through its pure decision
-function but has not yet had an end-to-end live AskClaude cancellation exercise.
+`~/.pi/agent/settings.json` points at
+`/Users/ramtin/personal/pi-claude-bridge`, so a restarted Pi process loads this
+worktree directly. This path is local machine state, not a repository or
+packaging requirement.
 
-PR 2 follows that handoff without changing the provider, session, or permission
-boundaries. `includePartialMessages` is asserted at the pure options boundary;
-recorded SDK stream fixtures continue to characterize the partial text,
-thinking, and tool event shapes. Renderer tests initialize the Pi 0.84 theme and
-exercise compact, expanded, nested, Markdown, and stateful component reuse paths.
-Retention tests pin every named limit, assembled-stream redaction, visible
-truncation, list omission accounting, and the bounded/redacted model-facing
-result. A Fable/high correctness review found three blockers, all fixed: the
-authoritative SDK result is now retained separately from multi-turn streamed
-narration and wins for the final model/UI answer; terminal failure text is
-visible even when a failed snapshot exists; and capped fields now receive one
-accurate truncation marker rather than a second pass that replaced the true
-omission count.
+### Phase 3: background job core — next, after the Phase 2 follow-up ships
 
-The review's non-blocking items were then dispositioned. These were accepted and
-implemented in the same PR:
-
-- **Policy annotations survive the cap.** The bounded model-facing result no
-  longer joins its segments and truncates the tail, which silently dropped a
-  permission override or denial exactly when the answer reached
-  `MODEL_RESULT_MAX_CHARS`. `assembleModelResult` spends one total budget in
-  explicit priority order — policy annotations, then the action summary, then
-  the answer — and the answer absorbs the shortfall because it is the only
-  segment whose loss is self-describing. It is budgeted from the runner's own
-  snapshot text plus its omission count, so a capped answer still carries one
-  accurate marker rather than a second marker stacked on the display copy. The
-  authoritative SDK result still wins over streamed narration. The action
-  summary has its own named cap (`ACTION_SUMMARY_MAX_CHARS`), annotations have
-  `POLICY_ANNOTATION_MAX_CHARS`, and a floor keeps the lower-priority segments
-  from starving the answer even if a caller hands over an unbounded one.
-- **One retained record per result.** The action summary is now derived inside
-  finalization from the retained snapshot instead of being passed in from the
-  raw one, and the error path summarizes the retained snapshot too, so the
-  model-facing summary, persisted details, and rendered tool list describe the
-  same bounded, redacted record on both the success and failure paths.
-- **One requested model.** AskClaude execute resolves `requestedModel` once from
-  `ASK_CLAUDE_DEFAULT_MODEL` and uses it for the delegation call and for all
-  partial, final, and error metadata, so the query and the model shown beside it
-  cannot disagree.
-- **No test-shaped production cast.** Finalization requires a real complete
-  `DelegationSnapshot`; the `as DelegationSnapshot` cast and the
-  `responseText` fallback that existed only to tolerate a `{}` fixture are gone,
-  and the unit fixtures build snapshots with `createDelegationSnapshot`.
-- **Boundary-split credential fragments are documented, not defended against.**
-  Redaction needs a whole credential in one string, and retention cuts strings
-  at boundaries chosen for length. A secret straddling one leaves an unmatched
-  fragment on the retained side. The caps are the real containment and
-  redaction is a courtesy pass over what remains; a streaming secret detector
-  carrying state across every field was rejected as more machinery than this
-  display path warrants.
-
-Three non-blocking items were deferred rather than implemented:
-
-- **A live subagent stream-event probe** would pin whether nested `Agent` calls
-  emit the `parent_tool_use_id` relation the renderer is prepared to indent.
-  The uncertainty is real and belongs in Phase 3, where nested background jobs
-  make it load-bearing and `tests/int-cc-contracts.mjs` can assert it against
-  the installed SDK.
-- **Expanded render performance** rebuilds every child component for each
-  expanded frame. Measure it against a large retained snapshot before
-  optimizing; a caching layer added on suspicion would be parallel rendering
-  machinery this phase deliberately avoided.
-- **The oversized-input compact label** stays as-is: a tool input over its field
-  cap renders as visibly truncated JSON rather than a structured summary, which
-  is honest about what was retained.
-
-Final validation on this branch: 265 unit tests, typecheck, `npm pack`
-dry-run, and `git diff --check` all pass. The live Agent SDK contract suite
-passed after the blocker fixes (17 passed, one environment-dependent skip) and
-was not rerun for the disposition changes, which add no new undocumented SDK
-behavior assumption. The remaining step for Phase 2 is merge of this branch;
-Phase 3 should start from its retained snapshot rather than inventing a second
-background-job event format.
-
-### Phase 3: background job core
+Do not start Phase 3 until the AskClaude details overlay follow-up above is
+reviewed, merged, and its dogfooding checks have been exercised.
 
 - Implement the job manager and lifecycle state machine.
 - Add `SpawnClaudeAgent` with `explorer` and `reviewer` profiles.
@@ -583,6 +441,46 @@ background-job event format.
 - Add the sticky live-jobs widget and human status/cancel commands.
 - Persist bounded completed-job details as TUI-only custom entries and deliver
   one bounded non-triggering model-visible result message.
+
+#### Starting handoff
+
+Build on what Phase 2 merged instead of standing up a second execution stack:
+
+- **Reuse the delegation runner.** It already owns one Claude-native Agent SDK
+  query lifecycle and exposes cancellation without importing provider
+  `QueryContext` or MCP result routing. A background job is another caller of
+  that runner, not a fork of it.
+- **Reuse the normalized snapshot as the job record.** Retention caps, visible
+  truncation, and redaction already produce a bounded record suitable for a
+  TUI-only custom entry and a bounded model-visible message. Do not invent a
+  second background-job event format.
+- **Resolve policy through the existing pure options boundary.** Model, effort,
+  capability inventory, permission mode, settings sources, and child environment
+  come from there, and `isolated: true` stays unrepresentable together with
+  `resumeSessionId`. Profiles select inputs to that boundary; they do not gain
+  their own policy code.
+- **Keep the lanes apart.** Background lifecycle stays outside blocking
+  `AskClaude` finalization and outside provider `QueryContext`, shared-session
+  synchronization, and MCP tool-result routing. Background jobs get their own
+  lifecycle owner rather than reentering the AskClaude glue.
+- **Do not generalize.** Two read-only profiles and a session-scoped store do
+  not justify a profile/plugin framework, a generic event bus, a repository
+  layer, or a persistence abstraction.
+
+First PR boundary — keep it small and reviewable without its UI: the in-process
+job manager and lifecycle state machine over the merged runner, plus
+`SpawnClaudeAgent` returning promptly with a job identifier, with `explorer` and
+`reviewer` capabilities enforced by explicit tool inventories, a launch-time
+context and working-directory snapshot, explicit terminal states (`succeeded`,
+`failed`, `cancelled`, `abandoned`), cancellation, and Pi session-shutdown
+cleanup covered by tests. Leave the sticky live-jobs widget, the TUI-only
+completion entry, the non-triggering model-visible completion message, and the
+human status/cancel commands to a second PR.
+
+Two Phase 2 deferrals become load-bearing here and should be settled early: the
+live subagent partial-stream probe, since nested `Agent` relations decide whether
+background jobs can be rendered as a tree, and the pre-aborted-signal edge, since
+a job manager will cancel work it did not launch on the current call stack.
 
 ### Phase 4: dynamic lifecycle tools
 
