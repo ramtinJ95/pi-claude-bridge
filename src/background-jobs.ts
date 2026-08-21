@@ -51,6 +51,19 @@ export type BackgroundJobExecutor = (run: {
 	onSnapshot: (snapshot: DelegationSnapshot) => void;
 }) => Promise<DelegationRunResult>;
 
+/**
+ * Lifecycle notifications for an extension-owned UI adapter. `settled` fires
+ * exactly once per job — terminal states are first-wins — and carries
+ * `duringShutdown: true` when the settlement happened inside `shutdown`/`reset`
+ * so a completion is never delivered into a session that is being torn down or
+ * replaced. `cleared` fires when a reset drops all session-scoped records.
+ */
+export type BackgroundJobTransition =
+	| { type: "spawned"; record: BackgroundJobRecord }
+	| { type: "updated"; record: BackgroundJobRecord }
+	| { type: "settled"; record: BackgroundJobRecord; duringShutdown: boolean }
+	| { type: "cleared" };
+
 export class BackgroundJobLimitError extends Error {
 	readonly runningJobId: string;
 	constructor(runningJobId: string) {
@@ -97,6 +110,8 @@ export class BackgroundJobManager {
 	private readonly records = new Map<string, BackgroundJobRecord>();
 	private readonly controllers = new Map<string, AbortController>();
 	private readonly settlements = new Map<string, Promise<void>>();
+	private readonly listeners = new Set<(transition: BackgroundJobTransition) => void>();
+	private shutdownDepth = 0;
 	private counter = 0;
 	private readonly idPrefix: string;
 	private readonly now: () => number;
@@ -116,6 +131,24 @@ export class BackgroundJobManager {
 		this.idPrefix = options?.idPrefix ?? randomIdPrefix();
 		this.sleep = options?.sleep ?? defaultSleep;
 		this.shutdownGraceMs = options?.shutdownGraceMs ?? BACKGROUND_JOB_SHUTDOWN_GRACE_MS;
+	}
+
+	/** Observe job lifecycle transitions. Returns an unsubscribe function. */
+	subscribe(listener: (transition: BackgroundJobTransition) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	// A listener failure must never corrupt job lifecycle state; it is logged
+	// and the transition continues to the remaining listeners.
+	private emit(transition: BackgroundJobTransition): void {
+		for (const listener of [...this.listeners]) {
+			try {
+				listener(transition);
+			} catch (error) {
+				this.onDebug?.(`background job listener error on ${transition.type}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
 
 	/**
@@ -156,6 +189,7 @@ export class BackgroundJobManager {
 		this.evict();
 		const controller = new AbortController();
 		this.controllers.set(id, controller);
+		this.emit({ type: "spawned", record });
 		this.settlements.set(id, this.run(id, input.execute, controller.signal));
 		return record;
 	}
@@ -198,17 +232,26 @@ export class BackgroundJobManager {
 	 * wait is real, not fire-and-forget.
 	 */
 	async shutdown(): Promise<void> {
-		const running = [...this.records.values()].filter((record) => record.status === "running");
-		if (running.length === 0) return;
-		for (const record of running) this.controllers.get(record.id)?.abort();
-		const settlements = running
-			.map((record) => this.settlements.get(record.id))
-			.filter((settlement): settlement is Promise<void> => settlement !== undefined);
-		await Promise.race([Promise.all(settlements), this.sleep(this.shutdownGraceMs)]);
-		for (const { id } of running) {
-			if (this.records.get(id)?.status !== "running") continue;
-			this.onDebug?.(`background job ${id}: unsettled after ${this.shutdownGraceMs}ms shutdown grace; marking abandoned`);
-			this.finish(id, "abandoned", {});
+		// Every settlement inside this window — the abort's own cancellation, a
+		// natural finish racing it, or the abandoned marking below — is flagged
+		// `duringShutdown` so no listener delivers it into a dying or replacement
+		// session.
+		this.shutdownDepth++;
+		try {
+			const running = [...this.records.values()].filter((record) => record.status === "running");
+			if (running.length === 0) return;
+			for (const record of running) this.controllers.get(record.id)?.abort();
+			const settlements = running
+				.map((record) => this.settlements.get(record.id))
+				.filter((settlement): settlement is Promise<void> => settlement !== undefined);
+			await Promise.race([Promise.all(settlements), this.sleep(this.shutdownGraceMs)]);
+			for (const { id } of running) {
+				if (this.records.get(id)?.status !== "running") continue;
+				this.onDebug?.(`background job ${id}: unsettled after ${this.shutdownGraceMs}ms shutdown grace; marking abandoned`);
+				this.finish(id, "abandoned", {});
+			}
+		} finally {
+			this.shutdownDepth--;
 		}
 	}
 
@@ -222,6 +265,7 @@ export class BackgroundJobManager {
 		this.records.clear();
 		this.controllers.clear();
 		this.settlements.clear();
+		this.emit({ type: "cleared" });
 	}
 
 	private async run(id: string, execute: BackgroundJobExecutor, signal: AbortSignal): Promise<void> {
@@ -250,7 +294,9 @@ export class BackgroundJobManager {
 	private storeSnapshot(id: string, snapshot: DelegationSnapshot): void {
 		const record = this.records.get(id);
 		if (!record || record.status !== "running") return;
-		this.records.set(id, { ...record, snapshot: retainDelegationSnapshot(snapshot) });
+		const updated = { ...record, snapshot: retainDelegationSnapshot(snapshot) };
+		this.records.set(id, updated);
+		this.emit({ type: "updated", record: updated });
 	}
 
 	private finish(
@@ -267,7 +313,9 @@ export class BackgroundJobManager {
 			this.onDebug?.(`background job ${id}: ignored late ${status} after terminal ${record.status}`);
 			return;
 		}
-		this.records.set(id, { ...record, ...patch, status, endedAt: this.now() });
+		const settled = { ...record, ...patch, status, endedAt: this.now() };
+		this.records.set(id, settled);
+		this.emit({ type: "settled", record: settled, duringShutdown: this.shutdownDepth > 0 });
 	}
 
 	private evict(): void {
