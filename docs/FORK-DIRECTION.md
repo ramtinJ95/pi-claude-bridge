@@ -434,7 +434,7 @@ still a dogfooding check because the harness has no live TUI driver:
 worktree directly. This path is local machine state, not a repository or
 packaging requirement.
 
-### Phase 3: background job core — Phase 3a PR #8 open, Phase 3b pending
+### Phase 3: background Claude agents — Phase 3a complete, Phase 3b implemented
 
 Readiness landed in
 [PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7) (`111c40a`): a
@@ -446,13 +446,15 @@ enables `Agent`/`forwardSubagentText` directly and is not production wiring —
 if a future profile launches nested agents, add both capabilities deliberately
 through the pure options boundary and that profile's explicit inventory.
 
-#### Phase 3a: headless job core — implemented in PR #8
+#### Phase 3a: headless job core — complete
 
-[PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) is open from
-`phase-3a-background-job-core`. Its commits deliberately separate shared
-snapshot retention, profile/diff capture, the job manager, Pi adapter wiring,
-and documentation. The branch passes 348 unit tests, TypeScript typecheck, npm
-package dry-run, and diff checks.
+[PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) merged as
+`49c0a21`. It deliberately separates shared snapshot retention, profile/diff
+capture, the job manager, Pi adapter wiring, and documentation. Its final
+blocking review caught that ordinary `git diff` omitted untracked files; the
+merged implementation includes tracked and untracked contents in the bounded
+frozen reviewer artifact. The merged branch passed 349 unit tests, TypeScript
+typecheck, and diff checks.
 
 Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
 
@@ -517,33 +519,103 @@ Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
   record neither. There is no second event format, framework, persistence,
   IPC, or Herdr backend.
 
-Current handoff before Phase 3b:
+#### Phase 3b: background job UI and completion delivery — implemented
 
-- Review PR #8 for lifecycle correctness and parity with the Phase 3a boundary;
-  do not pull widget/completion-delivery work into this PR.
-- Before merge, reload Pi from this local worktree and exercise a real explorer
-  and reviewer launch from a non-claude-bridge provider. Confirm the tool returns
-  a job ID without blocking the main turn, a second concurrent spawn fails
-  visibly, and reviewer base/diff capture failures are explicit.
-- Exercise `/reload` while a real job runs. Confirm shutdown stays within the
-  two-second grace when cancellation does not settle, and inspect for an
-  orphaned Claude Code process. Unit tests characterize both confirmed
-  cancellation and timeout-to-`abandoned`; the real runtime timing remains the
-  only material Phase 3a uncertainty.
-- Phase 3a intentionally has no user-facing way to inspect a completed job
-  beyond its retained in-process record. Do not mistake that headless boundary
-  for lost scope: the widget, completion entry/message, and human lifecycle
-  commands are the next PR.
+Phase 3b is implemented on top of the merged Phase 3a core, entirely as an
+extension-owned presentation/delivery adapter (`src/background-job-ui.ts`)
+over the unchanged `BackgroundJobManager` contract. The manager gained one
+narrow addition: a `subscribe` listener API that emits `spawned`, `updated`,
+one first-wins `settled` per job (flagged `duringShutdown` when it happened
+inside `shutdown`/`reset`), and `cleared`. There is still exactly one job
+state and one retained/redacted snapshot; the adapter keeps no job data of
+its own.
 
-#### Phase 3b: background job UI and completion delivery — remaining
+- **Live widget.** While a job runs, `ctx.ui.setWidget` shows a component
+  above the editor (TUI mode only) rendering only Claude-job facts from the
+  manager's record and retained snapshot: job ID, profile, requested/runtime
+  model, requested thinking, status, current action (latest running tool),
+  elapsed time, runtime permission mode, denial count, and usage once Claude
+  Code reports it. At most three lines, each truncated to the render width,
+  repainted on manager transitions plus a coarse 1-second tick; the widget is
+  removed on every terminal transition, session shutdown, and reset.
+- **Human status and cancellation.** `/claude-jobs` lists the session's
+  bounded job records; `/claude-jobs cancel [job-id]` cancels through
+  `BackgroundJobManager.cancel` and reports unknown or already-terminal jobs
+  honestly. No first-class model tools and no new keybinding were added — the
+  Pi 0.84.2 `ctrl+n` collision from Phase 2 argued for command-only until
+  dogfooding shows a shortcut is worth a key.
+- **Exactly-once completion delivery.** On each non-shutdown `settled`
+  transition the adapter appends one bounded, redacted, session-persisted
+  TUI-only custom entry (`claude-background-job`) whose registered renderer
+  works from persisted JSON alone — collapsed summary plus expanded task,
+  actions, aggregate tool line, usage, permission/managed-policy labels, and
+  response — including after session restore; and sends one bounded
+  model-visible custom message (`claude-background-job-result`,
+  `display: false`) with exactly
+  `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`, which Pi
+  0.84.2 queues alongside the next user prompt without interrupting or
+  triggering a turn. Succeeded/failed/cancelled/abandoned outcomes stay
+  explicit; an empty success says "produced no output text" rather than
+  reading as a blank answer, and permission/denial annotations survive a
+  capped answer via the shared `assembleModelResult` budget.
+- **Restore safety.** The custom-entry renderer is registered even when the
+  user later disables `askClaude.enabled`, so previously persisted entries
+  remain readable. Persisted data is treated as untrusted across restores and
+  versions: required fields, known profile/status values, and the snapshot
+  shape used by the renderer are validated before dereference; malformed or
+  future-incompatible data produces a visible unavailable placeholder instead
+  of breaking transcript reconstruction.
+- **No late completions into a replacement session.** Settlements during
+  `shutdown`/`reset` (including the abandoned marking itself) are flagged by
+  the manager and never delivered — their session is being torn down, so
+  shutdown-cancelled and abandoned jobs get no completion entry or message.
+  The spawn result text and tool description now state that results are
+  delivered on a later turn instead of the former "no result delivery"
+  wording. Known limitation: the queued next-turn message is in-memory Pi
+  state, so quitting Pi before the next prompt drops it.
+- **Tests** (`tests/unit-background-job-ui.mjs`, plus manager-transition
+  coverage in `tests/unit-background-jobs.mjs`) drive the Pi adapter through
+  a fake ExtensionAPI/UI: widget appear/update/remove against the real
+  manager, responsive width-bounded rendering, status/cancel command honesty,
+  exact-once delivery with the exact non-triggering options, explicit
+  empty/failed/cancelled/abandoned outcomes, JSON round-tripped restored
+  entry rendering, shutdown/reset suppression races, and listener-failure
+  isolation.
 
-- The sticky live-jobs widget and human status/cancel commands (the manager's
-  `cancel` contract exists and is tested; nothing invokes it yet).
-- Bounded completed-job details as a TUI-only custom entry.
-- One bounded non-triggering model-visible completion message using Pi
-  0.84.2's `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`.
-- The interactive AskClaude-overlay dogfooding checks listed under Phase 2,
-  plus live dogfooding of a real background job end-to-end.
+Implementation/review handoff:
+
+- Branch: `phase-3b-background-job-ui`; the working tree is intentionally
+  uncommitted until the change is split for review.
+- Validation: 375 unit tests pass, TypeScript typecheck and `git diff --check`
+  are clean, and `npm pack --dry-run` includes `src/background-job-ui.ts`.
+- The focused implementation review found two substantive restore-path gaps:
+  partial/unknown persisted payloads could throw, and disabling AskClaude also
+  disabled the old-entry renderer. Both are fixed with regression coverage.
+- No remaining blocking code-review finding is known. The next gate is the
+  runtime dogfooding below, followed by commit splitting and a PR.
+
+Outstanding runtime-only dogfooding — not performed yet, recorded rather than
+claimed:
+
+1. Reload Pi from this worktree and run one real `explorer` and one real
+   `reviewer` from a non-claude-bridge provider; confirm the spawn returns
+   without blocking, a second spawn fails visibly, an invalid reviewer base
+   fails explicitly, and `/reload` during a running job leaves no orphaned
+   Claude Code process.
+2. Watch the live widget in regular, fullscreen, and a small terminal;
+   confirm it repaints during a real job and disappears on completion and
+   cancellation.
+3. Exercise `/claude-jobs` and `/claude-jobs cancel` against a live job, and
+   confirm the completion message actually reaches the model on the next
+   prompt (and only then), including while a main-agent turn is streaming
+   when the job settles.
+4. Resume a session containing completion entries and confirm the restored
+   rendering.
+5. The interactive AskClaude overlay checks listed under Phase 2 remain open.
+
+Phase 3b does not add IPC, dynamic model-callable lifecycle tools, persistence
+across Pi sessions, mutation-capable agents, nested Claude agents, or a Herdr
+backend. Those remain Phase 4, later work, or the explicit investigation below.
 
 #### Deferred investigation: observable Herdr-backed Claude jobs
 

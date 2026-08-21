@@ -6,7 +6,7 @@ Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/
 
 1. **Provider** — Use Opus/Sonnet/Haiku as models in pi, with all tool calls flowing through pi's TUI
 2. **AskClaude tool** — Delegate tasks or questions to Claude Code when using another provider
-3. **SpawnClaudeAgent tool** — Start an independent background read-only Claude Code agent (exploration or code review) and keep working
+3. **SpawnClaudeAgent tool** — Start an independent background read-only Claude Code agent (exploration or code review) and keep working; a live widget tracks it and its bounded result is delivered back on a later turn
 
 
 **FYI:** Anthropic [announced and then unannounced](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) a change to how you would be billed for tools that use the Agent SDK like this one. It currently uses your regular subscription quota just like Claude Code.
@@ -101,7 +101,10 @@ keep working: the tool returns immediately with a stable job ID (e.g.
 plus a counter, so ID collisions across extension reloads are overwhelmingly
 unlikely) instead of waiting for Claude to finish. The job runs
 through the same delegation engine as AskClaude, always in a fresh isolated
-read-only Claude session.
+read-only Claude session. A sticky widget tracks the running job,
+`/claude-jobs` inspects or cancels it, and the job's bounded result is
+delivered back into the conversation exactly once when it reaches a terminal
+state (see below).
 
 ### Parameters
 
@@ -138,10 +141,43 @@ read-only Claude session.
   queries) and shutdown waits up to 2 seconds for them to confirm settlement.
   A job that confirms in time keeps its genuine terminal state (usually
   `cancelled`); only a job still unconfirmed after that grace period is
-  recorded as `abandoned`.
-- This phase ships the headless job core only: no status/result/cancel tools,
-  no live-jobs widget, and no delivery of the job's result back into the
-  conversation yet. Those arrive in a later phase.
+  recorded as `abandoned`. A job settled by shutdown or session switch is not
+  delivered anywhere — the session it belonged to is gone.
+- There are no model-callable status/result/cancel tools: the model spawns the
+  job and receives the completion message; humans inspect and cancel via
+  `/claude-jobs`.
+
+### Live widget, /claude-jobs, and completion delivery
+
+While a job runs, a compact widget above Pi's editor shows the Claude-job
+facts: job ID, profile, requested/runtime model, requested thinking, status,
+current action, elapsed time, runtime permission mode, permission-denial
+count, and usage once Claude Code reports it. It is at most three lines,
+truncated to the terminal width, and disappears on every terminal state,
+session shutdown, or session switch.
+
+Human commands (no model context consumed):
+
+- `/claude-jobs` — list this session's background jobs with status, elapsed
+  time, and model.
+- `/claude-jobs cancel [job-id]` — cancel the running job (the job ID is
+  optional when one job is running). Unknown or already-terminal jobs are
+  reported honestly instead of being "cancelled".
+
+When a job reaches a terminal state, its result is delivered exactly once:
+
+- One session-persisted, TUI-only entry with the reviewable details — task,
+  actions, aggregate tool status, usage, permission/managed-policy state, and
+  the bounded, redacted response. It renders collapsed by default, expands
+  with the usual tool-expand key, and still renders after a session is
+  resumed.
+- One bounded model-visible message sent with Pi 0.84.2's non-triggering
+  `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`: it is
+  queued alongside your next prompt and never interrupts or triggers a turn on
+  its own. Failed, cancelled, and abandoned jobs deliver explicit outcomes —
+  never a successful-looking empty result — and a success with no output text
+  says so. The queued message is in-memory Pi state: if Pi exits before your
+  next prompt, it is not re-delivered.
 
 ## Configuration
 
