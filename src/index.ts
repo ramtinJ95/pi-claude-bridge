@@ -26,7 +26,7 @@ import {
 import { collectCarriedAttachments, placeCarriedAttachments, type CarriedAttachment } from "./attachments.js";
 import { createToolServer } from "./mcp-server.js";
 import { askClaudeContextTags, buildAskClaudeContract } from "./askclaude-contract.js";
-import { clearLiveAskClaudeCall, registerAskClaudeDetailsUI, updateLiveAskClaudeCall } from "./askclaude-overlay.js";
+import { clearLiveAskClaudeCall, registerClaudeSessionsUI, updateLiveAskClaudeCall, type ClaudeSessionsUIHandle } from "./claude-sessions-overlay.js";
 import {
 	buildAskClaudePartialUpdate,
 	buildSnapshotActionSummary,
@@ -2454,9 +2454,13 @@ export default function (pi: ExtensionAPI) {
 	const askPermissionMode = resolveDelegationPolicy(defaultMode, askConf).requestedPermissionMode;
 	askClaudeToolName = askConf?.name ?? "AskClaude";
 
+	// The unified Claude Sessions overlay (Ctrl+N, /claude-details, and the
+	// /askclaude-details compatibility alias) registers under the same opt-in;
+	// its /claude-jobs open handle is wired into registerBackgroundJobUI below.
+	let claudeSessionsUI: ClaudeSessionsUIHandle | undefined;
 	if (askConf?.enabled) {
 		pi.on("tool_result", (event) => askClaudeResultIsError(event));
-		registerAskClaudeDetailsUI(pi, { toolName: askClaudeToolName });
+		claudeSessionsUI = registerClaudeSessionsUI(pi, { toolName: askClaudeToolName, jobs: backgroundJobs });
 
 		const askClaudeParams = Type.Object({
 			prompt: Type.String({ description: askContract.promptDescription }),
@@ -2627,5 +2631,6 @@ export default function (pi: ExtensionAPI) {
 		enabled: Boolean(askConf?.enabled),
 		jobs: backgroundJobs,
 		onDebug: debug,
+		openSessionsOverlay: claudeSessionsUI?.openBackgroundJobs,
 	});
 }

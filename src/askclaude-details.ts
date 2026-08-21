@@ -1,9 +1,13 @@
-// Extraction and view-model helpers for the AskClaude details overlay.
+// Extraction and view-model helpers for AskClaude records in the Claude
+// Sessions overlay.
 //
 // Everything here is pure over already-persisted session-branch entries or the
-// single in-memory live call slot. The overlay component (askclaude-overlay.ts)
-// owns keyboard/scroll state; this module owns what a call record is and which
-// lines it renders to. Header metadata comes exclusively from the Claude
+// single in-memory live call slot. The overlay component
+// (claude-sessions-overlay.ts) owns keyboard/scroll state; the unified view
+// model (claude-sessions.ts) merges these records with background jobs. This
+// module owns what an AskClaude call record is and which lines it renders to,
+// and its section renderer is reused for background records. Header metadata
+// comes exclusively from the Claude
 // delegation record — a missing value renders as "unavailable" rather than
 // falling back to the active Pi session's model, cwd, or permission settings.
 
@@ -19,7 +23,10 @@ import {
 } from "./askclaude-ui.js";
 import { managedPolicyLabels } from "./query-policy.js";
 
-export type AskClaudeCallStatus = "running" | "completed" | "failed" | "cancelled" | "unresolved";
+// "abandoned" never derives from an AskClaude call; the unified Claude
+// Sessions view model (claude-sessions.ts) maps background jobs whose Claude
+// Code process did not confirm termination onto the same status vocabulary.
+export type AskClaudeCallStatus = "running" | "completed" | "failed" | "cancelled" | "abandoned" | "unresolved";
 
 export interface AskClaudeCallRecord {
 	toolCallId: string;
@@ -144,19 +151,20 @@ export function clampScrollTop(top: number, totalLines: number, viewportLines: n
 	return Math.max(0, Math.min(top, Math.max(0, totalLines - viewportLines)));
 }
 
-const UNAVAILABLE = "unavailable";
+export const UNAVAILABLE = "unavailable";
 
-function statusPresentation(status: AskClaudeCallStatus): { icon: string; color: string } {
+export function statusPresentation(status: AskClaudeCallStatus): { icon: string; color: string } {
 	switch (status) {
 		case "running": return { icon: "◉", color: "mdLink" };
 		case "completed": return { icon: "✓", color: "success" };
 		case "failed": return { icon: "✗", color: "error" };
 		case "cancelled": return { icon: "⊘", color: "warning" };
+		case "abandoned": return { icon: "⊘", color: "warning" };
 		case "unresolved": return { icon: "•", color: "muted" };
 	}
 }
 
-function usageText(snapshot: DelegationSnapshot | undefined): string {
+export function usageText(snapshot: DelegationSnapshot | undefined): string {
 	const usage = snapshot?.usage;
 	if (!usage) return `tokens: ${UNAVAILABLE}`;
 	const cache = ` · cache ${usage.cacheReadInputTokens.toLocaleString()} read / ${usage.cacheCreationInputTokens.toLocaleString()} write`;
@@ -190,8 +198,8 @@ export function buildOverlayHeaderLines(
 	const lines: string[] = [];
 
 	lines.push(
-		theme.fg(status.color, `${status.icon} ${theme.bold("AskClaude details")}`) +
-		theme.fg("muted", ` · call ${position.index + 1}/${position.total} · ${record.status}${record.live ? " (live)" : ""}${elapsed} · ${when}`),
+		theme.fg(status.color, `${status.icon} ${theme.bold("AskClaude call")}`) +
+		theme.fg("muted", ` · record ${position.index + 1}/${position.total} · ${record.status}${record.live ? " (live)" : ""}${elapsed} · ${when}`),
 	);
 	const model = snapshot?.model
 		? `${snapshot.model}${details?.requestedModel ? ` (requested ${details.requestedModel})` : ""}`
@@ -244,13 +252,20 @@ function toolDepth(tool: DelegationToolCall, byId: Map<string, DelegationToolCal
 	return depth;
 }
 
+export interface OverlayBodyOptions {
+	/** Section title for the prompt section ("Prompt" for AskClaude, "Task" for background jobs). */
+	promptTitle?: string;
+	/** Explicit failure text (e.g. a background job record's bounded error) preferred over snapshot error derivation. */
+	failureText?: string;
+}
+
 /**
  * Scrollable body lines plus the section jump table. All content is the already
  * retained/redacted record — truncation and omission notices are shown as
  * persisted, never re-expanded — except the prompt, which is displayed from the
  * persisted tool-call arguments (or the live call's in-memory prompt).
  */
-export function buildOverlayBodyLines(record: AskClaudeCallRecord, theme: RenderTheme, width: number): OverlayBody {
+export function buildOverlayBodyLines(record: AskClaudeCallRecord, theme: RenderTheme, width: number, options?: OverlayBodyOptions): OverlayBody {
 	const details = record.details;
 	const snapshot = details?.snapshot;
 	const lines: string[] = [];
@@ -262,7 +277,7 @@ export function buildOverlayBodyLines(record: AskClaudeCallRecord, theme: Render
 		lines.push(theme.fg("muted", `── ${title}${omittedNote ?? ""} ──`));
 	};
 
-	section("Prompt");
+	section(options?.promptTitle ?? "Prompt");
 	const prompt = record.prompt ?? details?.prompt;
 	if (prompt) {
 		if (!record.prompt && details?.prompt) lines.push(theme.fg("dim", "(retained copy — original tool-call arguments unavailable)"));
@@ -309,9 +324,11 @@ export function buildOverlayBodyLines(record: AskClaudeCallRecord, theme: Render
 
 	section("Response");
 	const failed = record.status === "failed";
-	const failureText = failed ? snapshot?.error ?? (details?.error ? "Claude Code reported an error" : undefined) : undefined;
+	const failureText = options?.failureText
+		?? (failed ? snapshot?.error ?? (details?.error ? "Claude Code reported an error" : undefined) : undefined);
 	if (failureText) lines.push(theme.fg("error", failureText.startsWith("Error:") ? failureText : `Error: ${failureText}`));
 	if (record.status === "cancelled") lines.push(theme.fg("warning", "Cancelled — partial response below, if any."));
+	if (record.status === "abandoned") lines.push(theme.fg("warning", "Abandoned — the Claude Code process did not confirm termination; no result is available."));
 	const body = snapshot?.resultText ?? snapshot?.responseText;
 	if (body) lines.push(...markdownLines(body, width));
 	else if (!failureText) lines.push(theme.fg("dim", record.details ? "no response text retained" : "no result recorded for this call"));

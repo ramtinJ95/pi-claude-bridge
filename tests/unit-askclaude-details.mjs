@@ -14,14 +14,15 @@ import {
 	selectCallIndex,
 } from "../src/askclaude-details.js";
 import {
-	AskClaudeDetailsOverlay,
+	ClaudeSessionsOverlay,
 	clearLiveAskClaudeCall,
 	getLiveAskClaudeCall,
-	registerAskClaudeDetailsUI,
+	registerClaudeSessionsUI,
 	subscribeLiveAskClaudeCall,
 	updateLiveAskClaudeCall,
 	__overlayTest,
-} from "../src/askclaude-overlay.js";
+} from "../src/claude-sessions-overlay.js";
+import { mergeClaudeSessionRecords, requestedOverlayFocus } from "../src/claude-sessions.js";
 
 initTheme("dark", false);
 
@@ -107,16 +108,22 @@ function stubTui(rows = 30, columns = 100) {
 
 const kb = { matches: () => false };
 
+// The unified overlay consumes merged Claude-session records; these AskClaude
+// tests wrap the call records with no background jobs present.
+function asSessionRecords(records) {
+	return () => mergeClaudeSessionRecords(records(), []);
+}
+
 function makeOverlay(records, { rows = 30, columns = 100, requestedIndex, onDone } = {}) {
 	const tui = stubTui(rows, columns);
 	let doneCalls = 0;
-	const overlay = new AskClaudeDetailsOverlay(
+	const overlay = new ClaudeSessionsOverlay(
 		tui,
 		theme,
 		kb,
 		() => { doneCalls++; onDone?.(); },
-		() => records(),
-		requestedIndex,
+		asSessionRecords(records),
+		requestedIndex === undefined ? undefined : (merged) => requestedOverlayFocus(merged, requestedIndex),
 	);
 	return { overlay, tui, doneCount: () => doneCalls };
 }
@@ -185,26 +192,26 @@ describe("AskClaude call selection", () => {
 		assert.equal(selectCallIndex(0), -1);
 	});
 
-	it("navigates previous/next calls with reset scroll and shows the call position", () => {
+	it("navigates previous/next records with reset scroll and shows the record position", () => {
 		const records = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
 		const { overlay } = makeOverlay(() => records);
 		let rendered = overlay.render(100).join("\n");
-		assert.match(rendered, /call 3\/3/);
+		assert.match(rendered, /record 3\/3/);
 
 		overlay.scrollTop = 3;
-		overlay.handleInput("\x1b[D"); // left → previous call
+		overlay.handleInput("\x1b[D"); // left → previous record
 		assert.equal(overlay.scrollTop, 0);
-		assert.match(overlay.render(100).join("\n"), /call 2\/3/);
+		assert.match(overlay.render(100).join("\n"), /record 2\/3/);
 
 		overlay.handleInput("p");
-		assert.match(overlay.render(100).join("\n"), /call 1\/3/);
-		overlay.handleInput("p"); // clamped at the first call
-		assert.match(overlay.render(100).join("\n"), /call 1\/3/);
+		assert.match(overlay.render(100).join("\n"), /record 1\/3/);
+		overlay.handleInput("p"); // clamped at the first record
+		assert.match(overlay.render(100).join("\n"), /record 1\/3/);
 
 		overlay.handleInput("n");
-		overlay.handleInput("\x1b[C"); // right → next call
+		overlay.handleInput("\x1b[C"); // right → next record
 		rendered = overlay.render(100).join("\n");
-		assert.match(rendered, /call 3\/3/);
+		assert.match(rendered, /record 3\/3/);
 	});
 });
 
@@ -326,7 +333,7 @@ describe("AskClaude overlay scrolling", () => {
 		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", details)], "AskClaude");
 		const customKb = { matches: (data, binding) => data === "CUSTOM_PAGE_DOWN" && binding === "tui.select.pageDown" };
 		const tui = stubTui();
-		const overlay = new AskClaudeDetailsOverlay(tui, theme, customKb, () => {}, () => records);
+		const overlay = new ClaudeSessionsOverlay(tui, theme, customKb, () => {}, asSessionRecords(() => records));
 		overlay.render(100);
 		overlay.handleInput("CUSTOM_PAGE_DOWN");
 		assert.ok(overlay.scrollTop > 1);
@@ -349,7 +356,7 @@ describe("AskClaude overlay close keys and rendering", () => {
 		const rendered = overlay.render(100).join("\n");
 		assert.match(rendered, /lines \d+-\d+\/\d+ \(\d+%\)/);
 		assert.match(rendered, /↑↓\/jk scroll/);
-		assert.match(rendered, /prev\/next call/);
+		assert.match(rendered, /prev\/next record/);
 		assert.match(rendered, /q\/Esc\/Ctrl\+N close/);
 	});
 
@@ -415,16 +422,16 @@ describe("AskClaude live call state", () => {
 		const listenersBefore = __overlayTest.liveListenerCount();
 		const { overlay, tui } = makeOverlay(loadRecords);
 		assert.equal(__overlayTest.liveListenerCount(), listenersBefore + 1);
-		assert.match(overlay.render(100).join("\n"), /call 3\/3/);
+		assert.match(overlay.render(100).join("\n"), /record 3\/3/);
 
-		updateLiveAskClaudeCall({ toolCallId: "call-4", startedAt: 1, prompt: "live", details: { prompt: "live", snapshot: completedSnapshot({ status: "running" }) } });
+		updateLiveAskClaudeCall({ toolCallId: "call-4", startedAt: Date.parse("2026-08-20T10:30:00.000Z"), prompt: "live", details: { prompt: "live", snapshot: completedSnapshot({ status: "running" }) } });
 		assert.ok(tui.renders >= 1);
-		assert.match(overlay.render(100).join("\n"), /call 4\/4.*running \(live\)/);
+		assert.match(overlay.render(100).join("\n"), /record 4\/4.*running \(live\)/);
 
 		const rendersBeforeDispose = tui.renders;
 		overlay.dispose();
 		assert.equal(__overlayTest.liveListenerCount(), listenersBefore);
-		updateLiveAskClaudeCall({ toolCallId: "call-5", startedAt: 2, prompt: "later", details: { prompt: "later" } });
+		updateLiveAskClaudeCall({ toolCallId: "call-5", startedAt: Date.parse("2026-08-20T10:31:00.000Z"), prompt: "later", details: { prompt: "later" } });
 		assert.equal(tui.renders, rendersBeforeDispose);
 	});
 
@@ -440,12 +447,12 @@ describe("AskClaude live call state", () => {
 			bold: (text) => text,
 		};
 		const tui = stubTui();
-		const overlay = new AskClaudeDetailsOverlay(tui, countingTheme, kb, () => {}, loadRecords, 1);
-		assert.match(overlay.render(100).join("\n"), /call 1\/3/);
+		const overlay = new ClaudeSessionsOverlay(tui, countingTheme, kb, () => {}, asSessionRecords(loadRecords), (merged) => requestedOverlayFocus(merged, 1));
+		assert.match(overlay.render(100).join("\n"), /record 1\/3/);
 		const headingsAfterInitialRender = bodyHeadings;
 
-		updateLiveAskClaudeCall({ toolCallId: "call-4", startedAt: 1, prompt: "live", details: { prompt: "live" } });
-		assert.match(overlay.render(100).join("\n"), /call 1\/4/);
+		updateLiveAskClaudeCall({ toolCallId: "call-4", startedAt: Date.parse("2026-08-20T10:30:00.000Z"), prompt: "live", details: { prompt: "live" } });
+		assert.match(overlay.render(100).join("\n"), /record 1\/4/);
 		assert.equal(bodyHeadings, headingsAfterInitialRender, "a live update must not rebuild a pinned call's Markdown body");
 		overlay.dispose();
 	});
@@ -458,7 +465,7 @@ describe("AskClaude live call state", () => {
 			bold: (text) => text,
 		};
 		const tui = stubTui();
-		const overlay = new AskClaudeDetailsOverlay(tui, changingTheme, kb, () => {}, () => records);
+		const overlay = new ClaudeSessionsOverlay(tui, changingTheme, kb, () => {}, asSessionRecords(() => records));
 		assert.match(overlay.render(100).join("\n"), /before:── Prompt/);
 		marker = "after:";
 		overlay.invalidate();
@@ -473,10 +480,10 @@ describe("AskClaude overlay registration", () => {
 	it("does not let a closing overlay clear the replacement overlay's toggle owner", async () => {
 		const commands = new Map();
 		const shortcuts = new Map();
-		registerAskClaudeDetailsUI({
+		registerClaudeSessionsUI({
 			registerCommand: (name, command) => commands.set(name, command),
 			registerShortcut: (key, shortcut) => shortcuts.set(key, shortcut),
-		}, { toolName: "AskClaude" });
+		}, { toolName: "AskClaude", jobs: { list: () => [], running: () => undefined, subscribe: () => () => {} } });
 
 		let customCalls = 0;
 		const ctx = {

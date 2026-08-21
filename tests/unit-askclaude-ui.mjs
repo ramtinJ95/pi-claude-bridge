@@ -91,7 +91,7 @@ describe("AskClaude rich tool row", () => {
 		// Same grouped, path-aware action semantics as the collapsed view.
 		assert.match(rendered, /Agent\(review\); Read\(src\/a\.ts\)/);
 		assert.match(rendered, /2 tools: 1 running · 1 succeeded/);
-		assert.match(rendered, /\/askclaude-details/);
+		assert.match(rendered, /\/claude-details/);
 		assert.match(rendered, /Current answer/);
 	});
 
@@ -105,7 +105,7 @@ describe("AskClaude rich tool row", () => {
 		);
 		const rendered = component.render(120).join("\n");
 
-		// Deep inspection is owned by the /askclaude-details overlay.
+		// Deep inspection is owned by the /claude-details overlay.
 		assert.doesNotMatch(rendered, /── Tools/);
 		assert.doesNotMatch(rendered, /── Timeline/);
 		assert.doesNotMatch(rendered, /Input/);
