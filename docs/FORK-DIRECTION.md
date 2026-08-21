@@ -501,7 +501,8 @@ Phase 3a is the in-process job core on the merged Phase 2 stack, with no UI:
 - `src/reviewer-diff.ts` captures the reviewer's immutable status/diff artifact
   at launch — by the extension, never by Claude. An explicit `base` diffs from
   the merge base of `base` and HEAD to the launch-time working tree (branch/PR
-  semantics); without one it captures staged and unstaged changes from HEAD.
+  semantics); without one it captures tracked changes from HEAD. In both modes,
+  untracked file contents are also captured rather than merely listed by status.
   The artifact is bounded under named tested limits (40k diff / 4k status)
   with visible truncation, best-effort redaction, and a recorded source;
   non-git directories and invalid refs fail the spawn instead of yielding a

@@ -23,7 +23,7 @@ export interface ReviewerDiffArtifact {
 	/** `git status --porcelain` at launch; bounded, redacted, marker on truncation. */
 	statusText: string;
 	statusTruncated: boolean;
-	/** Unified diff at launch; bounded, redacted, marker on truncation. */
+	/** Unified diff at launch, including untracked files; bounded and redacted. */
 	diffText: string;
 	diffTruncated: boolean;
 }
@@ -41,7 +41,8 @@ export class ReviewerDiffError extends Error {
 function defaultGitRunner(cwd: string): GitRunner {
 	return (args) => new Promise((resolve) => {
 		execFile("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-			resolve({ code: error ? 1 : 0, stdout: stdout ?? "", stderr: stderr ?? "" });
+			const errorCode = error && typeof error.code === "number" ? error.code : 1;
+			resolve({ code: error ? errorCode : 0, stdout: stdout ?? "", stderr: stderr ?? "" });
 		});
 	});
 }
@@ -91,7 +92,7 @@ export async function captureReviewerDiff(input: {
 	const headRef = head.stdout.trim();
 
 	let diffFrom = "HEAD";
-	let source = `working tree at launch vs HEAD ${headRef} (staged + unstaged changes)`;
+	let source = `working tree at launch vs HEAD ${headRef} (tracked + untracked changes)`;
 	if (base !== undefined) {
 		const verified = await git(["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
 		if (verified.code !== 0) {
@@ -109,6 +110,21 @@ export async function captureReviewerDiff(input: {
 	if (status.code !== 0) throw gitFailure("git status", status);
 	const diff = await git(["diff", "--no-color", diffFrom]);
 	if (diff.code !== 0) throw gitFailure("git diff", diff);
+	const untracked = await git(["ls-files", "--others", "--exclude-standard", "-z"]);
+	if (untracked.code !== 0) throw gitFailure("git ls-files", untracked);
+
+	const untrackedPaths = untracked.stdout.split("\0").filter(Boolean);
+	const diffParts = diff.stdout ? [diff.stdout] : [];
+	for (const path of untrackedPaths) {
+		const untrackedDiff = await git(["diff", "--no-index", "--no-color", "--", "/dev/null", path]);
+		// `git diff --no-index` returns 1 when differences were found. Any
+		// higher code is a capture failure and must not produce a partial review.
+		if (untrackedDiff.code > 1) throw gitFailure(`untracked file ${JSON.stringify(path)}`, untrackedDiff);
+		diffParts.push(untrackedDiff.stdout || `Untracked empty file captured at launch: ${JSON.stringify(path)}\n`);
+	}
+	const completeDiff = diffParts
+		.map((part) => part.endsWith("\n") ? part : `${part}\n`)
+		.join("");
 
 	return {
 		cwd: input.cwd,
@@ -118,7 +134,7 @@ export async function captureReviewerDiff(input: {
 		headRef,
 		statusText: retainTextWithOmissions(status.stdout, REVIEWER_STATUS_MAX_CHARS),
 		statusTruncated: redactSensitiveText(status.stdout).length > REVIEWER_STATUS_MAX_CHARS,
-		diffText: retainTextWithOmissions(diff.stdout, REVIEWER_DIFF_MAX_CHARS),
-		diffTruncated: redactSensitiveText(diff.stdout).length > REVIEWER_DIFF_MAX_CHARS,
+		diffText: retainTextWithOmissions(completeDiff, REVIEWER_DIFF_MAX_CHARS),
+		diffTruncated: redactSensitiveText(completeDiff).length > REVIEWER_DIFF_MAX_CHARS,
 	};
 }

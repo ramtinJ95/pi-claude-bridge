@@ -37,7 +37,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
 		requiresDiffArtifact: true,
 		rolePrompt: [
 			"You are an independent background code-review agent.",
-			"Review the repository change captured in the diff artifact below. Use your read-only tools (Read, Glob, Grep, WebFetch, WebSearch) for surrounding context.",
+			"Review the repository change captured in the diff artifact below, including tracked and untracked files. Use your read-only tools (Read, Glob, Grep, WebFetch, WebSearch) for surrounding context.",
 			"You cannot run shell commands, edit files, or spawn agents; the diff artifact was captured for you when this job launched and is the only diff you will see.",
 			"Report findings ordered by severity with file paths and line references. Review only what the artifact shows: if it marks content as truncated or omitted, say so instead of guessing.",
 		].join("\n"),

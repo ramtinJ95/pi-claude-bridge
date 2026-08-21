@@ -30,6 +30,7 @@ function repoResponses(overrides = {}) {
 		"rev-parse --short=12 HEAD": ok("abcdef123456\n"),
 		"status --porcelain": ok(" M src/app.ts\n"),
 		"diff --no-color HEAD": ok("diff --git a/src/app.ts b/src/app.ts\n+new line\n"),
+		"ls-files --others --exclude-standard -z": ok(""),
 		...overrides,
 	};
 }
@@ -49,12 +50,32 @@ describe("reviewer diff capture", () => {
 		assert.equal(artifact.headRef, "abcdef123456");
 		assert.equal(artifact.baseRef, undefined);
 		assert.match(artifact.source, /HEAD abcdef123456/);
-		assert.match(artifact.source, /staged \+ unstaged/);
+		assert.match(artifact.source, /tracked \+ untracked/);
 		assert.equal(artifact.diffText, "diff --git a/src/app.ts b/src/app.ts\n+new line\n");
 		assert.equal(artifact.statusText, " M src/app.ts\n");
 		assert.equal(artifact.diffTruncated, false);
 		assert.equal(artifact.statusTruncated, false);
 		assert.ok(git.calls.includes("diff --no-color HEAD"));
+		assert.ok(git.calls.includes("ls-files --others --exclude-standard -z"));
+	});
+
+	it("includes untracked file contents in the frozen artifact", async () => {
+		const git = fakeGit(repoResponses({
+			"status --porcelain": ok("?? src/new thing.ts\n?? src/empty.ts\n"),
+			"diff --no-color HEAD": ok(""),
+			"ls-files --others --exclude-standard -z": ok("src/new thing.ts\0src/empty.ts\0"),
+			"diff --no-index --no-color -- /dev/null src/new thing.ts": {
+				code: 1,
+				stdout: "diff --git a/src/new thing.ts b/src/new thing.ts\n+new file contents\n",
+				stderr: "",
+			},
+			"diff --no-index --no-color -- /dev/null src/empty.ts": ok(""),
+		}));
+		const artifact = await captureReviewerDiff({ cwd: "/tmp/project", git });
+
+		assert.match(artifact.diffText, /new file contents/);
+		assert.match(artifact.diffText, /Untracked empty file captured at launch: "src\/empty\.ts"/);
+		assert.equal(artifact.diffTruncated, false);
 	});
 
 	it("diffs from the merge base of an explicit comparison base and records it", async () => {
