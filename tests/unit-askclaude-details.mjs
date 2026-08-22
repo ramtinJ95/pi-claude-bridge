@@ -531,7 +531,7 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 		const entries = [
 			callEntry("ask-1", "ask prompt", "AskClaude", "2026-08-20T09:00:00.000Z"),
 			resultEntry("ask-1", completedDetails()),
-			spawnCallEntry("spawn-1", { task: "fix the bug", profile: "worker", execution: "foreground" }, "2026-08-20T09:30:00.000Z"),
+			spawnCallEntry("spawn-1", { task: "fix the bug", mode: "full", execution: "foreground" }, "2026-08-20T09:30:00.000Z"),
 			spawnResultEntry("spawn-1", completedDetails({ origin: "spawn-foreground", profile: "worker", capabilityMode: "full" })),
 		];
 		const records = extractAskClaudeCalls(entries, "AskClaude", "SpawnClaudeAgent");
@@ -545,9 +545,9 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 
 	it("ignores background spawn calls and everything without a spawn tool name", () => {
 		const background = [
-			spawnCallEntry("spawn-bg", { task: "explore", profile: "explorer" }),
-			spawnCallEntry("spawn-bg2", { task: "explore", profile: "explorer", execution: "background" }),
-			spawnCallEntry("spawn-fg", { task: "fix", profile: "worker", execution: "foreground" }),
+			spawnCallEntry("spawn-bg", { task: "explore", mode: "read" }),
+			spawnCallEntry("spawn-bg2", { task: "explore", mode: "read", execution: "background" }),
+			spawnCallEntry("spawn-fg", { task: "fix", mode: "full", execution: "foreground" }),
 		];
 		assert.equal(extractAskClaudeCalls(background, "AskClaude", "SpawnClaudeAgent").length, 1);
 		// Without the spawn tool name (restored sessions of older versions), only AskClaude records appear.
@@ -556,7 +556,7 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 
 	it("labels spawn-foreground records distinctly from AskClaude compatibility calls", () => {
 		const [record] = extractAskClaudeCalls([
-			spawnCallEntry("spawn-1", { task: "fix", profile: "worker", execution: "foreground" }),
+			spawnCallEntry("spawn-1", { task: "fix", mode: "full", execution: "foreground" }),
 			spawnResultEntry("spawn-1", completedDetails({ origin: "spawn-foreground", profile: "worker" })),
 		], "AskClaude", "SpawnClaudeAgent");
 		const header = buildOverlayHeaderLines(record, { index: 0, total: 1 }, theme).join("\n");
@@ -581,11 +581,20 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 
 		// The live record also merges into a branch that already persisted the tool call.
 		const pending = extractAskClaudeCalls([
-			spawnCallEntry("spawn-live", { task: "live task", profile: "explorer", execution: "foreground" }),
+			spawnCallEntry("spawn-live", { task: "live task", mode: "read", execution: "foreground" }),
 		], "AskClaude", "SpawnClaudeAgent");
 		const merged = mergeLiveCall(pending, getLiveAskClaudeCall());
 		assert.equal(merged.length, 1);
 		assert.equal(merged[0].live, true);
 		assert.equal(merged[0].origin, "spawn-foreground");
+	});
+
+	it("derives advisor and reviewer labels from mode plus review while retaining legacy profile labels", () => {
+		const records = extractAskClaudeCalls([
+			spawnCallEntry("advisor", { task: "advise", mode: "none", execution: "foreground" }),
+			spawnCallEntry("review", { task: "review", mode: "read", review: {}, execution: "foreground" }),
+			spawnCallEntry("legacy", { task: "old", profile: "explorer", execution: "foreground" }),
+		], "AskClaude", "SpawnClaudeAgent");
+		assert.deepEqual(records.map((record) => record.profile), ["advisor", "reviewer", "explorer"]);
 	});
 });

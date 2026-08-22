@@ -672,7 +672,7 @@ describe("unified overlay registration", () => {
 describe("foreground SpawnClaudeAgent records in the unified list", () => {
 	function spawnForegroundEntry(id, timestamp) {
 		return messageEntry(
-			{ role: "assistant", content: [{ type: "toolCall", id, name: "SpawnClaudeAgent", arguments: { task: "fix the bug", profile: "worker", execution: "foreground" } }] },
+			{ role: "assistant", content: [{ type: "toolCall", id, name: "SpawnClaudeAgent", arguments: { task: "fix the bug", mode: "full", execution: "foreground" } }] },
 			timestamp,
 		);
 	}

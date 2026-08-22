@@ -19,7 +19,7 @@
 
 import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { AGENT_PROFILE_IDS, type AgentProfileId } from "./agent-profiles.js";
+import { AGENT_PROFILE_IDS, agentCapabilityMode, type AgentProfileId } from "./agent-profiles.js";
 import type { BackgroundJobManager, BackgroundJobRecord, BackgroundJobStatus } from "./background-jobs.js";
 import type { DelegationSnapshot } from "./delegation-events.js";
 import {
@@ -162,6 +162,7 @@ export function buildBackgroundJobWidgetLines(
 ): string[] {
 	const fit = (text: string) => truncateToWidth(text, Math.max(10, width), "…");
 	const snapshot = record.snapshot;
+	const mode = agentCapabilityMode(record.profile);
 	const status = statusPresentation(record.status);
 	const elapsed = formatJobElapsed((record.endedAt ?? nowMs) - record.createdAt);
 	const lines: string[] = [];
@@ -172,6 +173,7 @@ export function buildBackgroundJobWidgetLines(
 	));
 
 	const facts = [
+		mode ? `mode ${mode}` : undefined,
 		`model ${snapshot?.model ?? record.requestedModel}`,
 		record.thinking ? `thinking ${record.thinking}` : undefined,
 		snapshot?.runtimePermissionMode ? `permission ${snapshot.runtimePermissionMode}` : undefined,
@@ -281,6 +283,7 @@ export function renderBackgroundJobCompletion(
 		return container;
 	}
 	const snapshot = data.snapshot;
+	const mode = agentCapabilityMode(data.profile);
 	const status = statusPresentation(data.status);
 	const duration = data.endedAt !== undefined ? formatJobElapsed(data.endedAt - data.createdAt) : undefined;
 	const toolCount = (snapshot?.tools.length ?? 0) + (snapshot?.toolsOmitted ?? 0);
@@ -306,6 +309,7 @@ export function renderBackgroundJobCompletion(
 			: data.permission.effective
 		: snapshot?.runtimePermissionMode;
 	const metadata = [
+		mode ? `mode=${mode}` : undefined,
 		`model=${snapshot?.model ?? data.requestedModel}`,
 		data.thinking ? `thinking=${data.thinking}` : undefined,
 		permission ? `permission=${permission}` : undefined,
@@ -344,7 +348,8 @@ export function renderBackgroundJobCompletion(
 
 function outcomeHeadline(record: BackgroundJobRecord): string {
 	const duration = record.endedAt !== undefined ? ` after ${formatJobElapsed(record.endedAt - record.createdAt)}` : "";
-	const subject = `Background Claude job ${record.id} (${record.profile})`;
+	const mode = agentCapabilityMode(record.profile);
+	const subject = `Background Claude job ${record.id} (${mode ? `${mode}, ` : ""}${record.profile})`;
 	switch (record.status) {
 		case "succeeded":
 			return `[${subject} completed${duration}.]`;
@@ -415,9 +420,11 @@ export function buildJobStatusLines(records: BackgroundJobRecord[], nowMs: numbe
 	}
 	const lines = records.map((record) => {
 		const status = statusPresentation(record.status);
+		const mode = agentCapabilityMode(record.profile);
 		const elapsed = formatJobElapsed((record.endedAt ?? nowMs) - record.createdAt);
 		const facts = [
 			record.profile,
+			mode ? `mode ${mode}` : undefined,
 			record.status === "running" ? `running ${elapsed}` : `${status.label} after ${elapsed}`,
 			`model ${record.snapshot?.model ?? record.requestedModel}`,
 			record.thinking ? `thinking ${record.thinking}` : undefined,
