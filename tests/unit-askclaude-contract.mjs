@@ -11,11 +11,12 @@ describe("DelegateToClaude model-facing contract", () => {
 
 		assert.equal(contract.defaultMode, "read");
 		assert.equal(contract.defaultIsolated, true);
-		assert.match(contract.toolDescription, /Defaults to read-only mode/);
-		assert.match(contract.promptDescription, /fresh session without Pi conversation history/);
+		assert.match(contract.toolDescription, /Defaults to read;/);
+		assert.match(contract.promptDescription, /Fresh session without Pi history/);
 		assert.match(contract.modeDescription, /"read" \(default\)/);
 		assert.doesNotMatch(contract.modeDescription, /"full" \(default\)/);
-		assert.match(contract.isolatedDescription, /Defaults to true\./);
+		assert.match(contract.isolatedDescription, /Default: true\./);
+		assert.ok(Object.values(contract).filter((value) => typeof value === "string").every((value) => value.length < 200));
 	});
 
 	it("describes configured full and isolated defaults", () => {
@@ -26,19 +27,19 @@ describe("DelegateToClaude model-facing contract", () => {
 
 		assert.equal(contract.defaultMode, "full");
 		assert.equal(contract.defaultIsolated, true);
-		assert.match(contract.toolDescription, /Defaults to full mode/);
-		assert.match(contract.promptDescription, /fresh session without Pi conversation history/);
+		assert.match(contract.toolDescription, /Defaults to full;/);
+		assert.match(contract.promptDescription, /Fresh session without Pi history/);
 		assert.match(contract.modeDescription, /"full" \(default\)/);
 		assert.doesNotMatch(contract.modeDescription, /"read" \(default\)/);
-		assert.match(contract.isolatedDescription, /Defaults to true\./);
+		assert.match(contract.isolatedDescription, /Default: true\./);
 	});
 
 	it("allows configuration to restore shared history as the default", () => {
 		const contract = buildAskClaudeContract({ defaultIsolated: false });
 
 		assert.equal(contract.defaultIsolated, false);
-		assert.match(contract.promptDescription, /full conversation history/);
-		assert.match(contract.isolatedDescription, /Defaults to false\./);
+		assert.match(contract.promptDescription, /Pi history included/);
+		assert.match(contract.isolatedDescription, /Default: false\./);
 	});
 
 	it("honors a custom top-level description", () => {
@@ -84,8 +85,8 @@ describe("DelegateToClaude model-facing contract", () => {
 		const contract = buildAskClaudeContract({ defaultIsolated: "false" });
 
 		assert.equal(contract.defaultIsolated, true);
-		assert.match(contract.promptDescription, /fresh session without Pi conversation history/);
-		assert.match(contract.isolatedDescription, /Defaults to true\./);
+		assert.match(contract.promptDescription, /Fresh session without Pi history/);
+		assert.match(contract.isolatedDescription, /Default: true\./);
 	});
 });
 

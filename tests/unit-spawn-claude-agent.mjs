@@ -283,6 +283,19 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 });
 
 describe("SpawnClaudeAgent capability modes", () => {
+	it("keeps the model-facing schema concise without dropping its safety rules", () => {
+		const { pi } = wire();
+		const tool = pi.tools.get("SpawnClaudeAgent");
+		const properties = tool.parameters.properties;
+
+		assert.ok(tool.description.length < 300);
+		assert.match(tool.description, /do not poll/);
+		assert.match(tool.description, /do not edit concurrently/);
+		assert.ok(Object.values(properties).every((property) => !property.description || property.description.length < 160));
+		assert.match(properties.execution.description, /deliver the result later/);
+		assert.match(properties.isolated.description, /Background is always isolated/);
+	});
+
 	it("spawns a background worker with the full-capability prompt and a single-writer warning", async () => {
 		const { pi, jobs, captures, runs } = wire();
 		const result = await execute(pi, { task: "rename the helper", mode: "full", user_requested: true });

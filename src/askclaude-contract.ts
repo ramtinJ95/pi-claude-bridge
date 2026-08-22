@@ -16,8 +16,7 @@ export interface AskClaudeContract {
 	isolatedDescription: string;
 }
 
-const ANALYSIS_USE_CASES = "code review, architecture questions, debugging theories";
-const PREFER_DIRECT = "Prefer to handle straightforward tasks yourself.";
+const PREFER_DIRECT = "Handle straightforward tasks directly.";
 
 /**
  * Build the model-facing DelegateToClaude contract from the same effective defaults
@@ -62,43 +61,43 @@ function isAskClaudeMode(value: unknown): value is AskClaudeMode {
 }
 
 function toolDescription(defaultMode: AskClaudeMode, allowFull: boolean): string {
-	const base = `Delegate to Claude Code for a second opinion or analysis (${ANALYSIS_USE_CASES})`;
+	const base = `Ask Claude Code for analysis${allowFull ? " or delegated work" : ""}.`;
 	if (defaultMode === "full") {
-		return `${base}, or to autonomously handle a task. Defaults to full mode, which makes writing and bash available without feedback to pi; Claude Code permission policy still applies. Use read mode for analysis-only work. ${PREFER_DIRECT}`;
+		return `${base} Defaults to full; use read for analysis only. Full can write and run Bash under Claude Code permissions. ${PREFER_DIRECT}`;
 	}
 	if (defaultMode === "none") {
 		const available = allowFull
-			? "use read mode for codebase access or full mode for changes"
-			: "use read mode for codebase access";
-		return `${base}. Defaults to no-access mode — ${available}. ${PREFER_DIRECT}`;
+			? "use read for codebase access or full for changes"
+			: "use read for codebase access";
+		return `${base} Defaults to none; ${available}. ${PREFER_DIRECT}`;
 	}
 	if (allowFull) {
-		return `${base}, or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. ${PREFER_DIRECT}`;
+		return `${base} Defaults to read; use full only for user-requested changes. ${PREFER_DIRECT}`;
 	}
-	return `${base}. Read-only — Claude Code can explore the codebase but not make changes. ${PREFER_DIRECT}`;
+	return `${base} Read-only codebase access. ${PREFER_DIRECT}`;
 }
 
 function promptDescription(defaultIsolated: boolean): string {
 	const context = defaultIsolated
-		? "By default Claude starts a fresh session without Pi conversation history."
-		: "By default Claude sees the full conversation history.";
-	return `The question or task for Claude Code. ${context} Don't research up front, let Claude explore.`;
+		? "Fresh session without Pi history by default"
+		: "Pi history included by default";
+	return `Question or task. ${context}; let Claude explore.`;
 }
 
 function modeDescription(defaultMode: AskClaudeMode, allowFull: boolean): string {
 	const marker = (mode: AskClaudeMode) => mode === defaultMode ? " (default)" : "";
 	const parts = [
-		`"read"${marker("read")}: questions about the codebase — review, analysis, explain.`,
-		`"none"${marker("none")}: general knowledge only (no file access).`,
+		`"read"${marker("read")}: codebase analysis.`,
+		`"none"${marker("none")}: no tools.`,
 	];
 	if (allowFull) {
-		parts.push(`"full"${marker("full")}: makes writing and bash available (careful: runs without feedback to pi); permission policy still applies.`);
+		parts.push(`"full"${marker("full")}: Bash/Edit/Write without Pi feedback; Claude Code permissions apply.`);
 	}
 	return parts.join(" ");
 }
 
 function isolatedDescription(defaultIsolated: boolean): string {
-	return `When true, Claude starts a fresh session without Pi conversation history or session persistence. When false, Claude sees the full conversation history. Defaults to ${defaultIsolated}.`;
+	return `true: fresh session. false: include Pi conversation history. Default: ${defaultIsolated}.`;
 }
 
 export function askClaudeContextTags(

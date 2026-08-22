@@ -2378,27 +2378,27 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 	});
 
 	const modeValues = deps.allowFull ? ["none", "read", "full"] as const : ["none", "read"] as const;
-	const modeDescription = '"none": general knowledge only with no repository, shell, agent, or web access. "read": structurally read-only repository/web exploration.'
+	const modeDescription = '"none": no tools. "read": read-only repository/web access.'
 		+ (deps.allowFull
-			? ' "full": Bash/Edit/Write under Claude Code permission policy; use only when the user explicitly requests implementation delegation.'
+			? ' "full": Bash/Edit/Write; only for explicit user-requested implementation.'
 			: "");
 	const spawnClaudeAgentParams = Type.Object({
-		task: Type.String({ description: "The body of work for the agent. Include everything it needs: by default it runs in a fresh isolated Claude session with no Pi conversation history." }),
+		task: Type.String({ description: "Complete task instructions; isolated agents do not see Pi history." }),
 		mode: StringEnum(modeValues, { description: modeDescription }),
 		review: Type.Optional(Type.Object({
-			base: Type.Optional(Type.String({ description: "Optional git ref for branch/PR review. The captured diff spans its merge base with HEAD through the launch-time working tree." })),
-		}, { description: 'Optional code-review specialization. Valid only with mode="read". Omit base to review staged, unstaged, and untracked changes against HEAD.' })),
-		user_requested: Type.Optional(Type.Boolean({ description: 'Full mode only: must be true, and may be set only when the user explicitly asked to delegate implementation to Claude. Calls with mode="full" reject without this assertion.' })),
-		execution: Type.Optional(StringEnum(["foreground", "background"] as const, { description: '"background" (default): returns immediately with a job ID and delivers the bounded result as a message on a later turn. "foreground": blocks this tool call until the agent finishes and returns its bounded result directly, with live progress like DelegateToClaude.' })),
-		isolated: Type.Optional(Type.Boolean({ description: 'Foreground only. When true (default), the agent runs in a fresh Claude session without Pi conversation history. When false, it sees the Pi conversation history (shared session, like DelegateToClaude). Background jobs are always fresh and isolated: execution="background" with isolated=false is rejected.' })),
-		model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
+			base: Type.Optional(Type.String({ description: "Git ref; the review diff starts at its merge base with HEAD." })),
+		}, { description: 'Read-mode code review. Omit base to review working-tree changes against HEAD.' })),
+		user_requested: Type.Optional(Type.Boolean({ description: "Required true for full mode; set only for explicit user-requested implementation delegation." })),
+		execution: Type.Optional(StringEnum(["foreground", "background"] as const, { description: '"background" (default): return a job ID now and deliver the result later. "foreground": block and return the result directly.' })),
+		isolated: Type.Optional(Type.Boolean({ description: "Foreground only. true (default): fresh session. false: include Pi history. Background is always isolated." })),
+		model: Type.Optional(Type.String({ description: 'Model name or ID. Default: "opus".' })),
 		thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
 	});
 	pi.registerTool<typeof spawnClaudeAgentParams>({
 		name: spawnClaudeAgentToolName,
 		label: "Spawn Claude Agent",
-		description: "Start an independent Claude Code agent. Capability is explicit: none, read, or full; review is an optional read-only specialization with a frozen launch diff. By default (execution=\"background\") it returns immediately with a job ID; the job runs in a fresh isolated Claude session on context captured at launch, only one background job runs per Pi session, jobs do not survive the session, and the bounded result is delivered into this conversation as a message on a later turn — there are no status/result/cancel tools, so do not wait for or poll it. With execution=\"foreground\" the call blocks until the agent finishes and returns its bounded result directly."
-			+ (deps.allowFull ? " Use full mode only when the user explicitly asks to delegate implementation to Claude. It edits the current checkout; while a background full-mode worker runs you must not edit files yourself." : ""),
+		description: "Start a foreground or background (default) Claude Code agent. Background returns a job ID and delivers the result later; do not poll. One background job may run per Pi session."
+			+ (deps.allowFull ? " Full mode requires explicit user delegation; do not edit concurrently with a background full-mode agent." : ""),
 		parameters: spawnClaudeAgentParams,
 		renderCall(args, theme) {
 			let text = theme.fg("mdLink", theme.bold("SpawnClaudeAgent "));
@@ -2829,7 +2829,7 @@ export default function (pi: ExtensionAPI) {
 		const askClaudeParams = Type.Object({
 			prompt: Type.String({ description: askContract.promptDescription }),
 			mode: Type.Optional(StringEnum(modeValues, { description: askContract.modeDescription })),
-			model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
+			model: Type.Optional(Type.String({ description: 'Model name or ID. Default: "opus".' })),
 			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
 			isolated: Type.Optional(Type.Boolean({ description: askContract.isolatedDescription })),
 		});
