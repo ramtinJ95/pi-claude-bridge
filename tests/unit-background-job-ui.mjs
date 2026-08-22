@@ -183,6 +183,7 @@ describe("background job live widget", () => {
 			pending.state.onSnapshot(snapshotWith({
 				model: "claude-opus-runtime",
 				runtimePermissionMode: "default",
+				contextUsage: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 800, cacheCreationInputTokens: 80 },
 				tools: [{ id: "r1", name: "Read", status: "running", input: { file_path: "/tmp/project/src/a.ts" }, startedAt: 1, updatedAt: 1, parentToolUseId: null }],
 			}));
 			assert.ok(tui.renders > rendersBefore, "snapshot transition requests a render");
@@ -191,6 +192,7 @@ describe("background job live widget", () => {
 			assert.match(rendered, /permission default/);
 			assert.match(rendered, /now: Read\(src\/a\.ts\)/);
 			assert.match(rendered, /1 tool/);
+			assert.match(rendered, /context: 1,000 used/);
 		} finally {
 			widget.dispose();
 		}
@@ -251,8 +253,8 @@ describe("background job live widget", () => {
 		assert.ok(!explorer.join("\n").includes("single-writer"));
 	});
 
-	it("validates persisted worker completion entries as renderable", () => {
-		assert.equal(isRenderableCompletionData({
+	it("validates persisted worker completion entries and their context usage", () => {
+		const data = {
 			jobId: "claude-job-t-1",
 			profile: "worker",
 			status: "succeeded",
@@ -260,7 +262,19 @@ describe("background job live widget", () => {
 			requestedModel: "opus",
 			createdAt: 1,
 			launchCwd: "/tmp/project",
-		}), true);
+			snapshot: snapshotWith({
+				contextUsage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 20, model: "claude-opus-5", contextWindow: 200000 },
+			}),
+		};
+		assert.equal(isRenderableCompletionData(data), true);
+
+		for (const contextUsage of [
+			{ ...data.snapshot.contextUsage, inputTokens: -1 },
+			{ ...data.snapshot.contextUsage, contextWindow: 0 },
+			{ ...data.snapshot.contextUsage, model: 42 },
+		]) {
+			assert.equal(isRenderableCompletionData({ ...data, snapshot: { ...data.snapshot, contextUsage } }), false);
+		}
 	});
 
 	it("renders nothing and stops observing after dispose", async () => {
@@ -610,6 +624,22 @@ describe("completion entry rendering", () => {
 			const fallback = renderBackgroundJobCompletion(malformed, true, theme).render(120).join("\n");
 			assert.match(fallback, /entry unavailable/);
 		}
+	});
+
+	it("uses terminal job status for unavailable context-window wording", async () => {
+		const data = await settledEntryData(async () => runResult());
+		const abandoned = {
+			...data,
+			status: "abandoned",
+			snapshot: snapshotWith({
+				status: "running",
+				contextUsage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 20 },
+			}),
+		};
+		const rendered = renderBackgroundJobCompletion(abandoned, true, theme).render(160).join("\n");
+
+		assert.match(rendered, /context: 135 used · window unavailable/);
+		assert.doesNotMatch(rendered, /window pending/);
 	});
 
 	it("routes rendering through the registered entry renderer", async () => {

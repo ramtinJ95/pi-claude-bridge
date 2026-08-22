@@ -255,6 +255,8 @@ test("includePartialMessages yields the stream_event shapes processStreamEvent d
 	const contentBlocks = new Set();
 	const deltas = new Set();
 	const calls = [];
+	let messageStartUsage;
+	let messageDeltaUsage;
 	for await (const message of query({
 		prompt: "Think briefly about what 17 * 23 is, then call the alpha tool once, then state the number.",
 		options: providerOptions({ includePartialMessages: true, effort: "medium", mcpServers: toolServer([noArgTool("alpha")], calls) }),
@@ -262,6 +264,8 @@ test("includePartialMessages yields the stream_event shapes processStreamEvent d
 		if (message.type !== "stream_event") continue;
 		const event = message.event;
 		events.add(event?.type);
+		if (event?.type === "message_start") messageStartUsage = event.message?.usage;
+		if (event?.type === "message_delta") messageDeltaUsage = event.usage;
 		if (event?.content_block?.type) contentBlocks.add(event.content_block.type);
 		if (event?.delta?.type) deltas.add(event.delta.type);
 	}
@@ -274,6 +278,14 @@ test("includePartialMessages yields the stream_event shapes processStreamEvent d
 	}
 	for (const type of ["text_delta", "thinking_delta", "signature_delta", "input_json_delta"]) {
 		assert.ok(deltas.has(type), `no ${type} delta — got ${JSON.stringify([...deltas])}`);
+	}
+	for (const field of ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]) {
+		assert.equal(typeof messageStartUsage?.[field], "number", `message_start.usage.${field} missing: ${JSON.stringify(messageStartUsage)}`);
+	}
+	assert.equal(typeof messageDeltaUsage?.output_tokens, "number", `message_delta.usage.output_tokens missing: ${JSON.stringify(messageDeltaUsage)}`);
+	for (const field of ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]) {
+		const value = messageDeltaUsage?.[field];
+		assert.ok(value === null || typeof value === "number", `message_delta.usage.${field} is neither number nor null: ${JSON.stringify(messageDeltaUsage)}`);
 	}
 });
 

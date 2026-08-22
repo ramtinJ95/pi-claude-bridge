@@ -223,14 +223,33 @@ function addSection(container: Container, title: string, body: string): void {
 	container.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
 }
 
-export function usageLine(snapshot?: DelegationSnapshot): string | undefined {
+function contextTokens(snapshot?: DelegationSnapshot): number | undefined {
+	const usage = snapshot?.contextUsage;
+	if (!usage) return undefined;
+	return usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens;
+}
+
+export function contextUsageLine(snapshot?: DelegationSnapshot, running = snapshot?.status === "running"): string | undefined {
+	const tokens = contextTokens(snapshot);
+	if (tokens === undefined) return undefined;
+	const contextWindow = snapshot?.contextUsage?.contextWindow;
+	if (!contextWindow) return `context: ${tokens.toLocaleString()} used · window ${running ? "pending" : "unavailable"}`;
+	return `context: ${tokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${(tokens / contextWindow * 100).toFixed(1)}%)`;
+}
+
+export function runUsageLine(snapshot?: DelegationSnapshot): string | undefined {
 	const usage = snapshot?.usage;
 	if (!usage) return undefined;
 	const tokens = `${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out`;
 	const cache = usage.cacheReadInputTokens || usage.cacheCreationInputTokens
 		? ` · cache ${usage.cacheReadInputTokens.toLocaleString()} read / ${usage.cacheCreationInputTokens.toLocaleString()} write`
 		: "";
-	return `${tokens}${cache} · ${usage.turns} turns · $${usage.totalCostUsd.toFixed(4)}`;
+	return `run: ${tokens}${cache} · ${usage.turns} turns · $${usage.totalCostUsd.toFixed(4)}`;
+}
+
+export function usageLine(snapshot?: DelegationSnapshot, running = snapshot?.status === "running"): string | undefined {
+	const parts = [contextUsageLine(snapshot, running), runUsageLine(snapshot)].filter((part): part is string => Boolean(part));
+	return parts.length ? parts.join(" · ") : undefined;
 }
 
 /** Render both streaming partials and the final result from the same retained snapshot. */

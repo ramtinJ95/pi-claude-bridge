@@ -71,6 +71,7 @@ function completedSnapshot(overrides = {}) {
 		],
 		timelineOmitted: 3,
 		usage: { inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 900, cacheCreationInputTokens: 50, totalCostUsd: 0.1234, turns: 3, durationMs: 4000, durationApiMs: 3500, modelUsage: {} },
+		contextUsage: { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 800, cacheCreationInputTokens: 100, model: "claude-opus-runtime", contextWindow: 200000 },
 		...overrides,
 	};
 }
@@ -223,7 +224,8 @@ describe("DelegateToClaude details header is Claude-only", () => {
 		assert.match(header, /session: claude-session-1234/);
 		assert.match(header, /cwd: \/claude\/delegation\/cwd/);
 		assert.match(header, /permission: auto → default/);
-		assert.match(header, /tokens: 1,200 in \/ 340 out · cache 900 read \/ 50 write · 3 turns · \$0\.1234/);
+		assert.match(header, /context: 2,000 \/ 200,000 \(1\.0%\)/);
+		assert.match(header, /run: 1,200 in \/ 340 out · cache 900 read \/ 50 write · 3 turns · \$0\.1234/);
 		assert.match(header, /capability: read · conversation: isolated · thinking: high/);
 		assert.match(header, /completed/);
 	});
@@ -235,11 +237,29 @@ describe("DelegateToClaude details header is Claude-only", () => {
 		assert.match(header, /session: unavailable/);
 		assert.match(header, /cwd: unavailable/);
 		assert.match(header, /permission: unavailable/);
-		assert.match(header, /tokens: unavailable/);
+		assert.match(header, /context: unavailable/);
+		assert.match(header, /run: unavailable/);
 		assert.match(header, /capability: unavailable/);
 		assert.match(header, /conversation: unavailable/);
 		// Never inherit the Pi process working directory.
 		assert.ok(!header.includes(process.cwd()));
+	});
+
+	it("shows live context occupancy before cumulative run usage arrives", () => {
+		const snapshot = {
+			...createDelegationSnapshot(1000),
+			contextUsage: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 800, cacheCreationInputTokens: 80 },
+		};
+		const record = {
+			toolCallId: "live",
+			status: "running",
+			live: true,
+			details: { snapshot, capabilityMode: "read", isolated: true },
+		};
+		const header = buildOverlayHeaderLines(record, { index: 0, total: 1 }, theme).join("\n");
+
+		assert.match(header, /context: 1,000 used · window pending/);
+		assert.match(header, /run: pending/);
 	});
 });
 

@@ -34,6 +34,21 @@ export interface DelegationUsage {
 	modelUsage: Record<string, ModelUsage>;
 }
 
+/** Latest top-level Claude turn, kept separate from cumulative run usage. */
+export interface DelegationContextUsage {
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadInputTokens: number;
+	cacheCreationInputTokens: number;
+	/** Runtime model ID from the latest top-level message_start, when reported. */
+	model?: string;
+	/** Served window reported authoritatively by the terminal result. */
+	contextWindow?: number;
+}
+
+type DelegationContextUsageUpdate = Partial<Omit<DelegationContextUsage, "model" | "contextWindow">>
+	& Pick<DelegationContextUsage, "model" | "contextWindow">;
+
 export interface DelegationToolCall {
 	id: string;
 	name: string;
@@ -98,6 +113,7 @@ export interface DelegationSnapshot {
 	error?: string;
 	assistantError?: SDKAssistantMessageError;
 	usage?: DelegationUsage;
+	contextUsage?: DelegationContextUsage;
 	rateLimit?: SDKRateLimitInfo;
 	retry?: {
 		attempt: number;
@@ -118,6 +134,7 @@ export type DelegationEvent =
 	| { type: "tool_result"; at: number; id: string; output: string; isError: boolean; parentToolUseId: string | null }
 	| { type: "assistant_error"; at: number; error: SDKAssistantMessageError }
 	| { type: "permission_denial"; at: number; denial: DelegationPermissionDenial }
+	| { type: "context_usage"; at: number; usage: DelegationContextUsageUpdate; reset: boolean }
 	| { type: "usage"; at: number; usage: DelegationUsage }
 	| { type: "result"; at: number; subtype: string; stopReason: string | null; resultText?: string }
 	| { type: "retry"; at: number; attempt: number; maxRetries: number; delayMs: number; status: number | null; error: string }
@@ -168,10 +185,50 @@ function usageFromResult(message: Record<string, any>): DelegationUsage | undefi
 	};
 }
 
+function contextUsageFromStream(usage: Record<string, any> | undefined, model?: unknown): DelegationContextUsageUpdate | undefined {
+	if (!usage) return undefined;
+	// Server-side tools can cause several sampling iterations. The top-level
+	// fields are cumulative billing counts; the SDK documents the final
+	// iteration as the true context size for the request.
+	const iterations = Array.isArray(usage.iterations) ? usage.iterations : [];
+	const source = iterations.length ? iterations[iterations.length - 1] : usage;
+	const field = (name: string): number | undefined => {
+		const value = source?.[name];
+		return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+	};
+	const fields: DelegationContextUsageUpdate = {
+		inputTokens: field("input_tokens"),
+		outputTokens: field("output_tokens"),
+		cacheReadInputTokens: field("cache_read_input_tokens"),
+		cacheCreationInputTokens: field("cache_creation_input_tokens"),
+	};
+	for (const key of Object.keys(fields) as Array<keyof typeof fields>) {
+		if (fields[key] === undefined) delete fields[key];
+	}
+	if (!Object.keys(fields).length && typeof model !== "string") return undefined;
+	return {
+		...fields,
+		...(typeof model === "string" ? { model } : {}),
+	};
+}
+
 /** Convert one raw Agent SDK message into stable delegation events. */
 export function normalizeDelegationMessage(message: SDKMessage, at = Date.now()): DelegationEvent[] {
 	if (message.type === "stream_event") {
 		const event = message.event as any;
+		// These are per-request values, unlike the terminal result's cumulative
+		// usage. Keep only top-level turns: nested Agent frames carry a parent ID
+		// and describe the subagent's separate context rather than this session.
+		if (event?.type === "message_start") {
+			if (message.parent_tool_use_id) return [];
+			const usage = contextUsageFromStream(event.message?.usage, event.message?.model);
+			return usage ? [{ type: "context_usage", at, usage, reset: true }] : [];
+		}
+		if (event?.type === "message_delta") {
+			if (message.parent_tool_use_id) return [];
+			const usage = contextUsageFromStream(event.usage);
+			return usage ? [{ type: "context_usage", at, usage, reset: false }] : [];
+		}
 		if (event?.type === "content_block_start") {
 			if (event.content_block?.type === "tool_use") {
 				return [{
@@ -195,7 +252,7 @@ export function normalizeDelegationMessage(message: SDKMessage, at = Date.now())
 			if (event.delta?.type === "input_json_delta" || event.delta?.type === "signature_delta") return [];
 			return [{ type: "diagnostic", at, kind: "unknown_stream_event", label: `content_block_delta:${event.delta?.type ?? "unknown"}` }];
 		}
-		if (["message_start", "message_delta", "message_stop", "content_block_stop"].includes(event?.type)) return [];
+		if (["message_stop", "content_block_stop"].includes(event?.type)) return [];
 		return [{ type: "diagnostic", at, kind: "unknown_stream_event", label: event?.type ?? "unknown" }];
 	}
 
@@ -358,6 +415,8 @@ function timelineEntryForEvent(
 			return { at: event.at, kind: "assistant_error", label: String(event.error) };
 		case "permission_denial":
 			return { at: event.at, kind: "permission_denial", label: `${event.denial.toolName}: ${event.denial.message}`, toolUseId: event.denial.toolUseId };
+		case "context_usage":
+			return undefined;
 		case "usage":
 			return { at: event.at, kind: "usage", label: `${event.usage.turns} turns · ${event.usage.outputTokens} output tokens` };
 		case "result":
@@ -369,6 +428,26 @@ function timelineEntryForEvent(
 		case "diagnostic":
 			return { at: event.at, kind: event.kind, label: event.label };
 	}
+}
+
+function canonicalModelId(model: string): string {
+	return model.replace(/-\d{8}$/, "");
+}
+
+function servedContextWindow(
+	context: DelegationContextUsage | undefined,
+	modelUsage: Record<string, ModelUsage>,
+): number | undefined {
+	const entries = Object.entries(modelUsage)
+		.filter(([, usage]) => Number.isFinite(usage.contextWindow) && usage.contextWindow > 0);
+	if (!entries.length) return undefined;
+	if (context?.model) {
+		const model = canonicalModelId(context.model);
+		const match = entries.find(([id]) => canonicalModelId(id) === model);
+		if (match) return match[1].contextWindow;
+		return undefined;
+	}
+	return entries.length === 1 ? entries[0][1].contextWindow : undefined;
 }
 
 function appendTimeline(
@@ -481,8 +560,32 @@ export function reduceDelegationEvent(
 					(tool) => ({ ...tool, status: "denied", error: retainText(event.denial.message, TOOL_FIELD_MAX_CHARS), updatedAt: event.at, completedAt: event.at, durationMs: Math.max(0, event.at - tool.startedAt) })),
 			};
 		}
-		case "usage":
-			return { ...base, usage: event.usage };
+		case "context_usage": {
+			const prior = event.reset ? undefined : snapshot.contextUsage;
+			const model = event.usage.model ?? prior?.model;
+			const contextWindow = event.usage.contextWindow ?? prior?.contextWindow;
+			return {
+				...base,
+				contextUsage: {
+					inputTokens: event.usage.inputTokens ?? prior?.inputTokens ?? 0,
+					outputTokens: event.usage.outputTokens ?? prior?.outputTokens ?? 0,
+					cacheReadInputTokens: event.usage.cacheReadInputTokens ?? prior?.cacheReadInputTokens ?? 0,
+					cacheCreationInputTokens: event.usage.cacheCreationInputTokens ?? prior?.cacheCreationInputTokens ?? 0,
+					...(model ? { model } : {}),
+					...(contextWindow ? { contextWindow } : {}),
+				},
+			};
+		}
+		case "usage": {
+			const contextWindow = servedContextWindow(snapshot.contextUsage, event.usage.modelUsage);
+			return {
+				...base,
+				usage: event.usage,
+				contextUsage: snapshot.contextUsage
+					? { ...snapshot.contextUsage, ...(contextWindow ? { contextWindow } : {}) }
+					: undefined,
+			};
+		}
 		case "assistant_error":
 			return { ...base, assistantError: event.error };
 		case "result": {

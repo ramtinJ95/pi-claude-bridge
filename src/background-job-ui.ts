@@ -134,6 +134,19 @@ export function isRenderableCompletionData(value: unknown): value is BackgroundJ
 			if (typeof value.snapshot.usage[key] !== "number" || !Number.isFinite(value.snapshot.usage[key])) return false;
 		}
 	}
+	if (value.snapshot.contextUsage !== undefined) {
+		if (!isRecord(value.snapshot.contextUsage)) return false;
+		for (const key of ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"] as const) {
+			if (typeof value.snapshot.contextUsage[key] !== "number"
+				|| !Number.isFinite(value.snapshot.contextUsage[key])
+				|| value.snapshot.contextUsage[key] < 0) return false;
+		}
+		if (value.snapshot.contextUsage.model !== undefined && typeof value.snapshot.contextUsage.model !== "string") return false;
+		if (value.snapshot.contextUsage.contextWindow !== undefined
+			&& (typeof value.snapshot.contextUsage.contextWindow !== "number"
+				|| !Number.isFinite(value.snapshot.contextUsage.contextWindow)
+				|| value.snapshot.contextUsage.contextWindow <= 0)) return false;
+	}
 	return true;
 }
 
@@ -186,7 +199,7 @@ export function buildBackgroundJobWidgetLines(
 	const activity = [
 		`now: ${action}`,
 		toolCount ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : undefined,
-		usageLine(snapshot),
+		usageLine(snapshot, record.status === "running"),
 		"Ctrl+N details",
 		"/claude-jobs cancel to stop",
 	].filter(Boolean).join(" · ");
@@ -316,7 +329,7 @@ export function renderBackgroundJobCompletion(
 		snapshot?.sessionId ? `session=${snapshot.sessionId.slice(0, 12)}` : undefined,
 		`cwd=${data.launchCwd}`,
 		data.diffSource ? `diff=${data.diffSource}` : undefined,
-		usageLine(snapshot),
+		usageLine(snapshot, data.status === "running"),
 	].filter(Boolean).join(" · ");
 	container.addChild(new Text(theme.fg("dim", metadata), 0, 0));
 

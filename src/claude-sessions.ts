@@ -19,7 +19,7 @@ import {
 	usageText,
 	UNAVAILABLE,
 } from "./askclaude-details.js";
-import type { AskClaudeResultDetails, RenderTheme } from "./askclaude-ui.js";
+import { contextUsageLine, type AskClaudeResultDetails, type RenderTheme } from "./askclaude-ui.js";
 import { agentCapabilityMode } from "./agent-profiles.js";
 import type { BackgroundJobRecord, BackgroundJobStatus } from "./background-jobs.js";
 import {
@@ -277,7 +277,9 @@ function backgroundHeaderLines(
 		: snapshot?.runtimePermissionMode ?? UNAVAILABLE;
 	lines.push(theme.fg("dim", `mode: ${mode} · model: ${model} · session: ${snapshot?.sessionId ?? UNAVAILABLE} · permission: ${permission}`));
 	lines.push(theme.fg("dim", `cwd: ${data.launchCwd}${data.diffSource ? ` · diff: ${data.diffSource}` : ""}`));
-	lines.push(theme.fg("dim", usageText(snapshot)));
+	const running = data.status === "running";
+	lines.push(theme.fg("dim", contextUsageLine(snapshot, running) ?? `context: ${running ? "pending" : UNAVAILABLE}`));
+	lines.push(theme.fg("dim", usageText(snapshot, running)));
 	lines.push(theme.fg("dim", [
 		`job: ${data.jobId}`,
 		data.thinking ? `thinking: ${data.thinking}` : undefined,

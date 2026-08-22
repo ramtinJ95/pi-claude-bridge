@@ -16,6 +16,8 @@ import { Markdown } from "@earendil-works/pi-tui";
 import type { DelegationSnapshot, DelegationToolCall } from "./delegation-events.js";
 import {
 	formatToolDuration,
+	contextUsageLine,
+	runUsageLine,
 	toolStatusIcon,
 	valueMarkdown,
 	type AskClaudeResultDetails,
@@ -199,11 +201,8 @@ export function statusPresentation(status: AskClaudeCallStatus): { icon: string;
 	}
 }
 
-export function usageText(snapshot: DelegationSnapshot | undefined): string {
-	const usage = snapshot?.usage;
-	if (!usage) return `tokens: ${UNAVAILABLE}`;
-	const cache = ` · cache ${usage.cacheReadInputTokens.toLocaleString()} read / ${usage.cacheCreationInputTokens.toLocaleString()} write`;
-	return `tokens: ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out${cache} · ${usage.turns} turns · $${usage.totalCostUsd.toFixed(4)}`;
+export function usageText(snapshot: DelegationSnapshot | undefined, running = snapshot?.status === "running"): string {
+	return runUsageLine(snapshot) ?? `run: ${running ? "pending" : UNAVAILABLE}`;
 }
 
 function permissionText(details: AskClaudeResultDetails | undefined): string {
@@ -248,7 +247,9 @@ export function buildOverlayHeaderLines(
 			: UNAVAILABLE;
 	lines.push(theme.fg("dim", `model: ${model} · session: ${snapshot?.sessionId ?? UNAVAILABLE} · permission: ${permissionText(details)}`));
 	lines.push(theme.fg("dim", `cwd: ${snapshot?.cwd ?? UNAVAILABLE}`));
-	lines.push(theme.fg("dim", usageText(snapshot)));
+	const running = record.status === "running";
+	lines.push(theme.fg("dim", contextUsageLine(snapshot, running) ?? `context: ${running ? "pending" : UNAVAILABLE}`));
+	lines.push(theme.fg("dim", usageText(snapshot, running)));
 	lines.push(theme.fg("dim", [
 		`capability: ${details?.capabilityMode ?? UNAVAILABLE}`,
 		`conversation: ${details?.isolated == null ? UNAVAILABLE : details.isolated ? "isolated" : "shared"}`,

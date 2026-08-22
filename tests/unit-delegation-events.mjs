@@ -31,7 +31,127 @@ describe("normalized delegation events", () => {
 		assert.ok(snapshot.usage.outputTokens > 0);
 		assert.ok(snapshot.usage.cacheCreationInputTokens > 0);
 		assert.equal(snapshot.usage.turns, 1);
+		assert.deepEqual(snapshot.contextUsage, {
+			inputTokens: 10,
+			outputTokens: 47,
+			cacheReadInputTokens: 0,
+			cacheCreationInputTokens: 9317,
+			model: "claude-haiku-4-5-20251001",
+			contextWindow: 200000,
+		});
 		assert.equal(snapshot.resultSubtype, "success");
+	});
+
+	it("tracks the latest top-level turn live and ignores nested-agent context", () => {
+		const messages = fixture("parallel-tools");
+		assert.equal(messages[2]?.type, "stream_event");
+		assert.equal(messages[2]?.event?.type, "message_start");
+		let snapshot = createDelegationSnapshot(0);
+		for (let index = 0; index < 3; index++) {
+			snapshot = reduceDelegationMessage(snapshot, messages[index], index + 1);
+		}
+
+		assert.deepEqual(snapshot.contextUsage, {
+			inputTokens: 10,
+			outputTokens: 4,
+			cacheReadInputTokens: 5374,
+			cacheCreationInputTokens: 3971,
+			model: "claude-haiku-4-5-20251001",
+		});
+
+		const nested = structuredClone(messages[2]);
+		nested.parent_tool_use_id = "parent-agent";
+		assert.deepEqual(normalizeDelegationMessage(nested, 4), []);
+	});
+
+	it("preserves prior context fields when a delta reports nullable usage", () => {
+		let snapshot = {
+			...createDelegationSnapshot(0),
+			contextUsage: { inputTokens: 10, outputTokens: 4, cacheReadInputTokens: 5374, cacheCreationInputTokens: 3971, model: "claude-haiku-4-5" },
+		};
+		const delta = {
+			type: "stream_event",
+			parent_tool_use_id: null,
+			event: {
+				type: "message_delta",
+				usage: { input_tokens: null, output_tokens: 75, cache_read_input_tokens: null, cache_creation_input_tokens: null },
+			},
+		};
+
+		snapshot = reduceDelegationMessage(snapshot, delta, 1);
+		assert.deepEqual(snapshot.contextUsage, {
+			inputTokens: 10,
+			outputTokens: 75,
+			cacheReadInputTokens: 5374,
+			cacheCreationInputTokens: 3971,
+			model: "claude-haiku-4-5",
+		});
+	});
+
+	it("uses the final server-tool iteration instead of cumulative billing fields", () => {
+		const delta = {
+			type: "stream_event",
+			parent_tool_use_id: null,
+			event: {
+				type: "message_delta",
+				usage: {
+					input_tokens: 1000,
+					output_tokens: 500,
+					cache_read_input_tokens: 9000,
+					cache_creation_input_tokens: 800,
+					iterations: [
+						{ type: "message", input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 100, cache_creation_input_tokens: 30 },
+						{ type: "message", input_tokens: 12, output_tokens: 25, cache_read_input_tokens: 120, cache_creation_input_tokens: 35 },
+					],
+				},
+			},
+		};
+
+		const snapshot = reduceDelegationMessage(createDelegationSnapshot(0), delta, 1);
+		assert.deepEqual(snapshot.contextUsage, {
+			inputTokens: 12,
+			outputTokens: 25,
+			cacheReadInputTokens: 120,
+			cacheCreationInputTokens: 35,
+		});
+	});
+
+	it("keeps latest-turn context separate from cumulative terminal usage", () => {
+		const snapshot = replay("parallel-tools");
+
+		assert.equal(snapshot.contextUsage.inputTokens, 8);
+		assert.equal(snapshot.contextUsage.outputTokens, 75);
+		assert.equal(snapshot.contextUsage.cacheReadInputTokens, 9345);
+		assert.equal(snapshot.contextUsage.cacheCreationInputTokens, 345);
+		assert.equal(snapshot.contextUsage.contextWindow, 200000);
+		assert.equal(snapshot.usage.inputTokens, 18);
+		assert.equal(snapshot.usage.outputTokens, 301);
+	});
+
+	it("does not attach a sole context window to an explicitly different model", () => {
+		let snapshot = {
+			...createDelegationSnapshot(0),
+			contextUsage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 20, model: "claude-opus-5" },
+		};
+		snapshot = reduceDelegationEvent(snapshot, {
+			type: "usage",
+			at: 1,
+			usage: {
+				inputTokens: 10,
+				outputTokens: 5,
+				cacheReadInputTokens: 100,
+				cacheCreationInputTokens: 20,
+				totalCostUsd: 0,
+				turns: 1,
+				durationMs: 1,
+				durationApiMs: 1,
+				modelUsage: {
+					"claude-haiku-4-5": { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 20, webSearchRequests: 0, costUSD: 0, contextWindow: 200000, maxOutputTokens: 32000 },
+				},
+			},
+		});
+
+		assert.equal(snapshot.contextUsage.contextWindow, undefined);
 	});
 
 	it("matches a tool result to its call and records output and duration", () => {

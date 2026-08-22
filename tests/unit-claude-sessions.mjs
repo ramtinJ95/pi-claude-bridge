@@ -81,6 +81,7 @@ function bgSnapshot(overrides = {}) {
 		],
 		timeline: [{ at: T("09:30:10"), kind: "tool_start", label: "Read", toolUseId: "t1" }],
 		usage: { inputTokens: 1500, outputTokens: 200, cacheReadInputTokens: 100, cacheCreationInputTokens: 20, totalCostUsd: 0.0456, turns: 2, durationMs: 300000, durationApiMs: 250000, modelUsage: {} },
+		contextUsage: { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 800, cacheCreationInputTokens: 100, model: "claude-opus-runtime", contextWindow: 200000 },
 		...overrides,
 	};
 }
@@ -338,7 +339,8 @@ describe("background record header", () => {
 		assert.match(header, /session: claude-session-bg/);
 		assert.match(header, /permission: auto → default/);
 		assert.match(header, /cwd: \/tmp\/project · diff: merge-base main/);
-		assert.match(header, /tokens: 1,500 in \/ 200 out · cache 100 read \/ 20 write · 2 turns · \$0\.0456/);
+		assert.match(header, /context: 2,000 \/ 200,000 \(1\.0%\)/);
+		assert.match(header, /run: 1,500 in \/ 200 out · cache 100 read \/ 20 write · 2 turns · \$0\.0456/);
 		assert.match(header, /job: claude-job-t-1 · thinking: high/);
 		// Nothing borrows the active Pi session's cwd.
 		assert.ok(!header.includes(process.cwd()));
@@ -353,7 +355,8 @@ describe("background record header", () => {
 		assert.match(header, /model: unavailable \(requested opus\)/);
 		assert.match(header, /session: unavailable/);
 		assert.match(header, /permission: unavailable/);
-		assert.match(header, /tokens: unavailable/);
+		assert.match(header, /context: pending/);
+		assert.match(header, /run: pending/);
 		assert.match(header, /job: claude-job-t-9/);
 	});
 

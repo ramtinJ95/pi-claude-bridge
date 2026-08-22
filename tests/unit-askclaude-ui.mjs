@@ -2,7 +2,14 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { createDelegationSnapshot } from "../src/delegation-events.js";
-import { buildAskClaudePartialUpdate, buildToolAggregateLine, renderAskClaudeResult } from "../src/askclaude-ui.js";
+import {
+	buildAskClaudePartialUpdate,
+	buildToolAggregateLine,
+	contextUsageLine,
+	renderAskClaudeResult,
+	runUsageLine,
+	usageLine,
+} from "../src/askclaude-ui.js";
 
 initTheme("dark", false);
 
@@ -10,6 +17,28 @@ const theme = {
 	fg: (_color, text) => text,
 	bold: (text) => text,
 };
+
+describe("delegation usage presentation", () => {
+	it("separates live context occupancy from cumulative run usage", () => {
+		const snapshot = {
+			...createDelegationSnapshot(0),
+			contextUsage: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 800, cacheCreationInputTokens: 80 },
+		};
+
+		assert.equal(contextUsageLine(snapshot), "context: 1,000 used · window pending");
+		assert.equal(runUsageLine(snapshot), undefined);
+		assert.equal(usageLine(snapshot), "context: 1,000 used · window pending");
+
+		snapshot.contextUsage.contextWindow = 200000;
+		snapshot.usage = { inputTokens: 120, outputTokens: 30, cacheReadInputTokens: 900, cacheCreationInputTokens: 100, totalCostUsd: 0.0123, turns: 2, durationMs: 1500, durationApiMs: 1200, modelUsage: {} };
+		assert.equal(contextUsageLine(snapshot), "context: 1,000 / 200,000 (0.5%)");
+		assert.equal(runUsageLine(snapshot), "run: 120 in / 30 out · cache 900 read / 100 write · 2 turns · $0.0123");
+
+		delete snapshot.contextUsage.contextWindow;
+		snapshot.status = "failed";
+		assert.equal(contextUsageLine(snapshot), "context: 1,000 used · window unavailable");
+	});
+});
 
 function details() {
 	return {
