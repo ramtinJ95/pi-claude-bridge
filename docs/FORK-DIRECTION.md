@@ -26,12 +26,11 @@ The fork should make Claude Code delegation observable, policy-correct, and
 capable of running independent background agents without expanding Pi's native
 tool surface unnecessarily.
 
-The intended experience has two prominent Claude operations:
-
-1. `AskClaude` for blocking delegation when the main agent needs Claude's answer
-   before it can proceed.
-2. `SpawnClaudeAgent` for independent background exploration and review while
-   the main Pi session continues working.
+The intended experience now centers on `SpawnClaudeAgent`: profile selects the
+capability (`explorer`, `reviewer`, or `worker`) and execution selects
+foreground/blocking or background/nonblocking delivery. `AskClaude` remains a
+temporary compatibility surface for its free-form `none`/`read`/`full` contract
+while runtime parity and removal UX are evaluated.
 
 Pi's existing `spawn_agent` remains separate and Pi-native. This fork will not
 turn it into a model-selection mechanism or silently route it through Claude.
@@ -131,29 +130,34 @@ The UI and documentation must state this distinction clearly.
 repair, resume, and rebuild machinery. Preserve the current tests around tool
 pairing, attachments, cursor management, and divergent histories.
 
-### 6. Add a separate background `SpawnClaudeAgent`
+### 6. Keep `SpawnClaudeAgent` separate from Pi agents
 
 `SpawnClaudeAgent` is Claude-native, not a wrapper around Pi's `spawn_agent`.
-It returns promptly with a job identifier so the main agent can continue.
+Background execution returns promptly with a job identifier so the main agent
+can continue; foreground execution blocks and returns the result directly.
 
-Initial profiles:
+Profiles:
 
 - `explorer`: repository reading/search and appropriate web research; no edits.
 - `reviewer`: repository and diff inspection; no edits.
+- `worker`: full Claude Code capability in the current checkout, available only
+  for explicit user-requested implementation delegation.
 
-Both profiles:
+All profiles:
 
 - Use `permissionMode: "auto"` by default.
-- Run in independent Claude sessions.
+- Run in independent Claude sessions by default.
 - Receive a stable context snapshot at launch.
 - Support configurable Claude model and effort.
 - Emit the same normalized events and telemetry as blocking `AskClaude`.
-- Are read-only initially, making concurrent execution safe with the main
-  agent's working tree.
+- Can run in foreground or background; foreground may explicitly share Pi
+  conversation history.
 
-Background mutation is deferred. If later supported, use an isolated worktree
-or an explicit conflict protocol rather than allowing Claude and the main agent
-to edit the same files concurrently.
+Explorer and reviewer remain structurally read-only. Worker mutation uses one
+process-global checkout lease shared with AskClaude full mode, so concurrent
+Claude writers fail visibly, including across extension reload. A background
+worker also exposes a single-writer warning requiring the main agent to avoid
+mutating the checkout until the worker actually settles.
 
 ### 7. Keep lifecycle operations out of Pi's native tool list
 
@@ -255,8 +259,8 @@ runner:
 - The **provider lane** keeps its specialized Pi stream lifecycle, MCP tool
   result routing, steering, reentrant `QueryContext` handling, and shared-session
   synchronization.
-- The **delegation lane** uses one Claude-native runner for blocking
-  `AskClaude` and background `SpawnClaudeAgent` jobs.
+- The **delegation lane** uses one Claude-native runner for foreground
+  `AskClaude`/`SpawnClaudeAgent` calls and background jobs.
 - Share only pure query policy/options resolution and normalized SDK event
   parsing where doing so removes real duplication.
 
@@ -335,227 +339,72 @@ adapters:
 
 ## Delivery status and handoff
 
-### Completed foundation: Phases 0–2
+### Completed through Phase 3c
 
-- [PR #2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2): Pi 0.84.2 and
-  Node.js 22.19 baseline, matching development packages, and truthful provider
-  lifecycle-hook compatibility characterization.
-- [PR #3](https://github.com/ramtinJ95/pi-claude-bridge/pull/3): structural
-  capability policy, configurable `permissionMode: "auto"`, safe AskClaude
-  read/isolated defaults, and visible runtime policy overrides.
-- [PR #4](https://github.com/ramtinJ95/pi-claude-bridge/pull/4) and
-  [PR #5](https://github.com/ramtinJ95/pi-claude-bridge/pull/5): shared
-  Claude-native delegation runner, normalized bounded/redacted snapshots, and
-  rich blocking AskClaude rendering.
-- [PR #6](https://github.com/ramtinJ95/pi-claude-bridge/pull/6): scrollable
-  `/askclaude-details` / `Ctrl+N` overlay with Claude-only telemetry and retained
-  tool/timeline inspection.
-- [PR #7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7): pre-aborted
-  runner safety and live characterization of the installed nested-Agent stream
-  behavior. Production profiles still exclude nested `Agent`.
-
-### Phase 3: background Claude agents — implementation complete
-
+- PRs [#2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2)–[#7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7)
+  established the Pi 0.84.2 baseline, structural capability/permission policy,
+  shared delegation runner, bounded telemetry, rich AskClaude rendering, and
+  the original details overlay.
 - [PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) added the
-  headless `SpawnClaudeAgent` core: one session-scoped job, isolated read-only
-  `explorer`/`reviewer` profiles, bounded tracked-and-untracked reviewer
-  artifacts, collision-resistant IDs, explicit terminal states, cancellation,
-  and bounded shutdown/reset cleanup.
-- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) added the Phase
-  3b presentation/delivery adapter over that same manager and snapshot:
-  a compact sticky live widget; `/claude-jobs` status and human cancellation;
-  one restore-safe TUI-only completion entry; and one bounded model-visible
-  completion queued with
-  `sendMessage(..., { triggerTurn: false, deliverAs: "nextTurn" })`.
-  Shutdown/reset settlements are suppressed so an old job cannot deliver into
-  a replacement session. No model-callable lifecycle tools or second job-state
-  system were added.
+  session-scoped background job core and read-only explorer/reviewer profiles.
+- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) added the live
+  widget, human cancellation, restore-safe completion entries, and bounded
+  next-turn delivery.
+- [PR #10](https://github.com/ramtinJ95/pi-claude-bridge/pull/10) replaced the
+  AskClaude-only viewer with the unified Claude Sessions overlay.
+- [PR #11](https://github.com/ramtinJ95/pi-claude-bridge/pull/11) completed
+  Phase 3c: worker profile, foreground/background execution, shared foreground
+  AskClaude compatibility path, structured worker authorization, immediate
+  hard-close on cancellation, and one process-global checkout write lease
+  across every full-capability Claude delegation.
 
-Phase 3 validation was 375 passing unit tests, clean TypeScript typecheck and
-`git diff --check`, and a package dry-run containing the new UI module. The
-Phase 3b review found and fixed two restore-path bugs: malformed/future entry
-payloads now degrade visibly rather than throwing, and persisted entries remain
-renderable if AskClaude is later disabled.
+PR #11 validation is 447 passing unit tests, clean TypeScript typecheck and
+`git diff --check`, and a package dry-run containing the new lease module.
+Runtime dogfooding has not yet been recorded.
 
-### Unified Claude Sessions overlay — complete
+### Current handoff: dogfood Phase 3c
 
-[PR #10](https://github.com/ramtinJ95/pi-claude-bridge/pull/10) unified the
-previously separate AskClaude details and background-job status surfaces. Its
-final validation is 408 passing unit tests, clean TypeScript typecheck and
-`git diff --check`, plus a package dry-run containing the replacement overlay
-and omitting the superseded AskClaude-only module.
+This checkout is loaded directly from
+`/Users/ramtin/personal/pi-claude-bridge`; after local `main` is updated,
+`/reload` activates Phase 3c. Start Pi from the repository root for reviewer
+tests because reviewer diff capture deliberately fails outside a Git worktree.
 
-The AskClaude-only details overlay from PR #6 has been superseded by one
-unified "Claude Sessions" overlay covering both AskClaude calls and background
-jobs, reusing the same overlay component, scrolling, responsive rendering, and
-retained/redacted snapshots — no second viewer framework or retention path.
+Run these checks in order and record observed results here:
 
-- One flat chronological list across both kinds with clear kind/profile/status
-  labels; AskClaude ISO timestamps and background epoch timestamps are
-  normalized before sorting, with deterministic branch order as the fallback.
-- `Ctrl+N` toggles the overlay, focusing a running background job first
-  (pinned across live updates), else the chronologically latest record. The
-  already-shipped Pi 0.84.2 `Ctrl+N` session-picker conflict is accepted;
-  configurability is deferred.
-- `/claude-details [n]` is the canonical command with an optional 1-based
-  index into the merged list. `/askclaude-details [n]` remains as a
-  compatibility alias — the same unfiltered overlay focused on the latest
-  AskClaude record, with `n` resolved among AskClaude calls only — not a
-  separately filtered view.
-- `/claude-jobs` with no arguments opens the overlay focused on the running
-  (else latest) background job, notifies honestly when the session has none,
-  and keeps its textual status output outside the TUI; `/claude-jobs cancel`
-  is unchanged. The live widget hint mentions `Ctrl+N` details alongside the
-  cancel guidance.
-- Background records come from the persisted `claude-background-job`
-  completion entries (validated by the same guard the transcript renderer
-  uses, so malformed/future entries degrade visibly) merged with the job
-  manager's records, deduplicated by job ID: the persisted entry wins for
-  settled jobs; the manager supplies running state and is the terminal
-  fallback when persistence is absent.
-- The overlay stays behind the `askClaude.enabled` registration gate;
-  persisted completion entries remain renderable in the transcript when it is
-  disabled. One overlay owner and one close toggle; the overlay subscribes to
-  the AskClaude live slot and the manager while open and releases both on
-  dispose.
+1. **Reviewer/background baseline:** run a real reviewer, reject a concurrent
+   background spawn, reject an invalid `base`, and confirm one bounded result
+   arrives on a later turn.
+2. **Foreground worker:** use a harmless explicit edit with
+   `user_requested: true`, first isolated and then shared
+   (`isolated: false`). Confirm live row updates, direct result delivery,
+   correct cwd/permission metadata, and foreground records in the unified
+   overlay.
+3. **Background worker ownership:** run one harmless worker and confirm the
+   spawn/widget warning. While it runs, verify a second background worker,
+   foreground worker, and AskClaude full call all fail on the same checkout
+   lease. Cancel mid-edit and confirm the lease releases only after real
+   settlement.
+4. **Reload/termination:** reload during a long worker. Confirm the SDK child is
+   gone, no orphan keeps editing, and a replacement runtime cannot acquire the
+   writer lease before the old executor settles.
+5. **Restore and layout:** resume the session and inspect mixed AskClaude,
+   foreground SpawnClaudeAgent, and background records through `Ctrl+N`,
+   `/claude-details`, and `/claude-jobs`; check small-terminal and fullscreen
+   rendering.
+6. **Negative contracts:** reject background `isolated: false`, reject worker
+   calls without `user_requested: true`, and confirm `allowFullMode: false`
+   removes/rejects the worker profile.
 
-### Phase 3c: worker agents and selectable execution — implementation complete
+A real Opus/high explorer job already confirmed nonblocking execution, the live
+widget, structural read-only tools, and later-turn result delivery. Do not
+repeat that run unless another change touches those paths.
 
-One combined change extended the existing `SpawnClaudeAgent` tool rather than
-adding another first-class tool. Implemented (not yet runtime-dogfooded):
-
-- A `worker` profile backed by the existing `full` capability policy (Claude
-  Code preset with the same disallowed interactive/lifecycle tools as
-  AskClaude full mode). Permission policy comes from the configured
-  `askClaude.permissionMode` (default `auto`) for both execution modes and
-  never hard-codes `bypassPermissions`; the `allowFullMode: false` lockout
-  removes the worker profile from the schema and rejects it at dispatch. The
-  worker role prompt states the current-checkout single-writer ownership and
-  forbids commit/push/PR/branch changes/destructive cleanup without explicit
-  task authorization. Its tool contract also requires the explicit structured
-  assertion `user_requested: true`, which may be supplied only for
-  user-requested implementation delegation. Explorer/reviewer remain
-  structurally read-only.
-- `execution: "foreground" | "background"`, defaulting to `background` to
-  preserve the shipped contract. Foreground awaits the shared delegation
-  runner and returns the bounded result in the current Pi tool call; background
-  keeps the existing manager, immediate job ID, widget, cancellation, shutdown,
-  persistence, one-job limit, and next-turn delivery path.
-- Foreground execution runs through one shared `executeForegroundDelegation`
-  adapter extracted from the AskClaude registration: the same runner, throttled
-  live updates, retained snapshot, rich renderer, error promotion, live overlay
-  slot, and finalization. There is no second synchronous runner or result
-  format.
-- Background execution remains fresh and isolated; `execution: "background"`
-  with `isolated: false` is rejected visibly. Foreground supports fresh
-  isolated (default) or `isolated: false` with the exact AskClaude
-  shared-session resume behavior. Reviewer diff capture and base validation
-  run in both execution modes, and launches use Pi's execute-context cwd
-  (AskClaude delegation now also uses the session cwd instead of
-  `process.cwd()`).
-- One atomic checkout write lease covers background workers, foreground
-  workers, and AskClaude full mode. It is backed by process-global state across
-  extension reloads, so a replacement runtime cannot forget an unsettled old
-  writer; another writer fails visibly. Background workers additionally
-  surface the single-writer warning in their immediate result and live widget.
-  An `abandoned` manager record does not release ownership: the lease remains
-  until the executor really settles. Delegation abort now requests cooperative
-  interrupt and immediately closes the SDK query transport, so a wedged
-  interrupt cannot leave a worker editing behind a dismissed warning. A
-  dedicated git-worktree lifecycle remains deliberately deferred.
-- `AskClaude` remains registered as a compatibility tool and now maps onto the
-  same foreground implementation, preserving its mode none/read/full contract,
-  configurable defaults/name/label/allowFull/appendSkills, rendering,
-  persisted-call extraction, and `/askclaude-details` numbering (which counts
-  actual AskClaude compatibility calls only). The unified overlay includes
-  foreground SpawnClaudeAgent calls as distinctly labelled foreground Claude
-  records read from the same persisted tool-call/result pairs — no new raw
-  persistence format. Do not remove AskClaude until foreground
-  SpawnClaudeAgent parity has been dogfooded, including shared-session
-  behavior and restored overlay records; removal/deprecation is a later
-  explicit decision, not an incidental refactor.
-
-SpawnClaudeAgent foreground now covers AskClaude's blocking execution, live
-telemetry, and shared-session mechanics, but it does not yet replace every
-product use: its profile-based contract intentionally has no no-access
-equivalent of AskClaude `mode: "none"`. That gap and the compatibility-removal
-UX must be decided explicitly after dogfooding rather than hidden behind a
-misleading profile mapping.
-
-One policy resolver, delegation runner, retention path, and foreground UI
-adapter remain. `execution` selects orchestration and delivery; `profile`
-selects capability and role. Neither dimension owns a duplicate runner.
-
-Phase 3c validation: 447 passing unit tests (including worker policy/prompt,
-schema/dispatch/invalid combinations, foreground success/failure/cancellation/
-live updates, wrapper parity, overlay extraction/labels/focus, worker UI labels,
-hard-close on a wedged interrupt, structured worker authorization, and the
-process-global checkout lease through abandonment/reload), clean TypeScript
-typecheck and `git diff --check`, and a package dry-run containing the changed
-modules. Runtime dogfooding has not happened yet — see the handoff below.
-
-### Current handoff: runtime dogfooding
-
-The implementation is complete; the next gate is real Pi runtime validation.
-This workstation loads `/Users/ramtin/personal/pi-claude-bridge` directly from
-`~/.pi/agent/settings.json`, so `/reload` loads the current worktree.
-
-Completed runtime evidence before the unified-overlay change:
-
-- A real `explorer` job using Opus/high ran independently for 6m58s while the
-  main Pi session remained usable. Its isolated prompt and structural read-only
-  inventory were correct, the live widget updated, and one bounded completion
-  reached the model on a later turn.
-- The run launched from Pi's process cwd (`/Users/ramtin`) rather than the
-  repository it explored (`/Users/ramtin/personal/pi-claude-bridge`). Explorer
-  could locate the repository, but a reviewer launched from that cwd would fail
-  the git-work-tree check. Decide after overlay dogfooding whether starting Pi
-  in the target repository is an acceptable contract or launch cwd needs an
-  explicit product control; do not hide the failure with cwd guessing.
-- `/claude-jobs`' old multiline notification duplicated the better live widget
-  and went stale immediately. That observation directly motivated the unified
-  overlay and its new TUI command behavior.
-
-1. Run a real `reviewer` job from a repository-root Pi session. Confirm visible
-   rejection of a second concurrent spawn and explicit invalid-base failures.
-2. Exercise the live widget in regular, fullscreen, and a small terminal. Test
-   `/claude-jobs` opening the unified overlay (running job, latest settled job,
-   and empty session) and `/claude-jobs cancel`, including completion and human
-   cancellation.
-3. Repeat the confirmed one-completion next-turn delivery while a main-agent
-   turn is active as the job settles. Quitting Pi before the next prompt is a
-   known loss boundary for the in-memory queued message; the persisted TUI
-   entry remains.
-4. Run `/reload` during a real job and inspect for orphaned Claude Code
-   processes. Resume a session containing completion entries and confirm their
-   renderer restores correctly.
-5. Finish the outstanding Claude Sessions overlay checks: running-call and
-   running-job open/close via `Ctrl+N`, `/claude-details`, and the
-   `/askclaude-details` compatibility alias; mixed AskClaude/background
-   navigation; small/fullscreen rendering; and restored records after a
-   session resume. The Pi 0.84.2 `Ctrl+N` session-picker conflict is accepted
-   as shipped.
-
-Phase 3c is implemented but not yet dogfooded. In addition to the checks
-above, exercise:
-
-6. A real foreground `worker` call (isolated and `isolated=false`), confirming
-   live tool-row updates, the overlay's `SpawnClaudeAgent worker (foreground)`
-   record while running and after restore, and that shared-session resume
-   behaves like AskClaude's.
-7. A real background `worker` job: the single-writer warning in the spawn
-   result and widget, permission behavior under the managed sandbox policy
-   (auto mode with Bash/Edit under managed settings has not been observed at
-   runtime), completion delivery, cancellation mid-edit, rejection of another
-   foreground/background/full-AskClaude writer, and lease continuity across
-   `/reload` until the old executor settles.
-8. Visible rejection of `execution="background"` with `isolated=false`, and
-   worker calls without `user_requested: true`; also confirm the worker profile
-   disappears under `allowFullMode: false`.
-
-Then run the runtime gate above against explorer, reviewer, and worker paths;
-do not begin Phase 4 by default until the evidence is recorded and any
-blocking runtime issue is fixed.
+After the gate passes, decide whether to remove AskClaude. SpawnClaudeAgent
+foreground covers blocking, telemetry, and shared-session behavior, but there
+is intentionally no profile equivalent of AskClaude `mode: "none"`; either add
+an advisor/no-access profile or explicitly drop that use case. Then proceed to
+Phase 4. Do not begin IPC work while worker termination or write ownership is
+still uncertain.
 
 ### Deferred Herdr investigation
 
@@ -588,8 +437,8 @@ must never silently replace or fall back from the structured SDK backend.
 - Replacing or overloading Pi's native `spawn_agent`.
 - Adding first-class Pi tools for every background lifecycle operation.
 - Exposing or claiming access to private/raw chain-of-thought.
-- Allowing background Claude agents to mutate the main working tree in the
-  initial implementation.
+- Allowing multiple Claude delegations to mutate the checkout concurrently or
+  releasing write ownership before an executor actually settles.
 - Automatically dumping full Claude transcripts or tool output into the main
   model's context.
 - Building one universal runner around both provider MCP orchestration and
@@ -601,13 +450,18 @@ must never silently replace or fall back from the structured SDK backend.
 
 These implementation and later-product decisions remain open:
 
-1. **IPC transport:** choose a Unix-domain socket, localhost authenticated
+1. **AskClaude compatibility:** after Phase 3c dogfooding, either add a
+   no-access/advisor SpawnClaudeAgent profile or explicitly drop AskClaude
+   `mode: "none"`, then decide the compatibility removal timeline.
+2. **Launch cwd:** decide whether repository-root Pi startup remains the
+   reviewer contract or SpawnClaudeAgent needs an explicit cwd parameter.
+3. **IPC transport:** choose a Unix-domain socket, localhost authenticated
    endpoint, or another explicit protocol for code-mode lifecycle tools.
-2. **Provider scope:** decide how much rich telemetry and UI from delegation
+4. **Provider scope:** decide how much rich telemetry and UI from delegation
    should also apply when Claude Bridge is selected as Pi's primary provider.
-3. **Herdr backend:** decide from a live probe whether its lifecycle/result
+5. **Herdr backend:** decide from a live probe whether its lifecycle/result
    contract is reliable enough to support as an explicit optional backend.
-4. **Independent name:** choose a package, provider, and config namespace only
+6. **Independent name:** choose a package, provider, and config namespace only
    after the architecture has materially diverged.
 
 ## Load-bearing invariants
@@ -618,6 +472,8 @@ These implementation and later-product decisions remain open:
   it starts, not mutable ambient state.
 - Read-only profiles must be enforced by available tools, not merely requested
   in prose.
+- Every full-capability Claude delegation must hold the process-global checkout
+  write lease until its executor actually settles.
 - Managed Claude policy always wins over user or extension preferences.
 - Every started job reaches a visible terminal state and has a cancellation and
   cleanup path.
