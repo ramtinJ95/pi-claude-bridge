@@ -501,6 +501,30 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		assert.equal(writeLease.current(), undefined);
 	});
 
+	it("fails closed on a spawned worker with no settlement handle", async () => {
+		const record = {
+			id: "claude-job-broken-1",
+			profile: "worker",
+			task: "edit",
+			requestedModel: "opus",
+			status: "running",
+			createdAt: 42,
+			launch: { cwd: "/repo", capturedAt: 42 },
+		};
+		const jobs = {
+			running: () => undefined,
+			spawn: () => record,
+			settled: () => undefined,
+			reset: async () => {},
+			shutdown: async () => {},
+		};
+		const { pi, writeLease } = wire({ jobs });
+		const result = await execute(pi, { task: "edit", mode: "full", user_requested: true });
+		assert.equal(result.details.error, true);
+		assert.match(result.content[0].text, /write ownership remains held/);
+		assert.ok(writeLease.current(), "an unconfirmed running writer must keep blocking checkout mutation");
+	});
+
 	it("releases a foreground worker lease when execution settles", async () => {
 		const { pi, writeLease } = wire();
 		await execute(
@@ -558,5 +582,16 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		assert.ok(text.includes("execution=foreground"));
 		assert.ok(text.includes("user-requested"));
 		assert.ok(text.includes("shared"));
+	});
+
+	it("derives mode tags for restored Phase 3c profile-based calls", () => {
+		const { pi } = wire();
+		const tool = pi.tools.get("SpawnClaudeAgent");
+		const theme = { fg: (_c, t) => t, bold: (t) => t };
+		const rendered = tool.renderCall({ task: "old review", profile: "reviewer", execution: "foreground" }, theme);
+		const text = JSON.stringify(rendered);
+		assert.ok(text.includes("mode=read"));
+		assert.ok(text.includes("agent=reviewer"));
+		assert.ok(!text.includes("mode=undefined"));
 	});
 });

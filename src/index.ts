@@ -37,7 +37,7 @@ import {
 import { assembleModelResult } from "./delegation-retention.js";
 import { buildDelegationQueryOptions } from "./delegation-options.js";
 import { runDelegation, type DelegationQueryFactory, type DelegationRunResult } from "./delegation-runner.js";
-import { AGENT_PROFILES, buildAgentJobPrompt, resolveAgentProfile, type AgentProfile, type AgentProfileId } from "./agent-profiles.js";
+import { AGENT_PROFILES, agentCapabilityMode, buildAgentJobPrompt, resolveAgentProfile, type AgentProfile, type AgentProfileId } from "./agent-profiles.js";
 import { BackgroundJobLimitError, BackgroundJobManager, type BackgroundJobLaunch, type BackgroundJobRecord } from "./background-jobs.js";
 import { registerBackgroundJobUI } from "./background-job-ui.js";
 import { captureReviewerDiff, type ReviewerDiffArtifact } from "./reviewer-diff.js";
@@ -2402,7 +2402,12 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 		parameters: spawnClaudeAgentParams,
 		renderCall(args, theme) {
 			let text = theme.fg("mdLink", theme.bold("SpawnClaudeAgent "));
-			const tags = [`mode=${args.mode}`, `execution=${args.execution ?? "background"}`];
+			// Restored Phase 3c tool calls still carry `profile`; derive their
+			// capability so old transcript rows never render `mode=undefined`.
+			const legacyProfile = (args as typeof args & { profile?: unknown }).profile;
+			const mode = args.mode ?? (typeof legacyProfile === "string" ? agentCapabilityMode(legacyProfile) : undefined);
+			const tags = [`mode=${mode ?? "unavailable"}`, `execution=${args.execution ?? "background"}`];
+			if (typeof legacyProfile === "string") tags.push(`agent=${legacyProfile}`);
 			if (args.review) tags.push("review");
 			if (args.user_requested) tags.push("user-requested");
 			if (args.isolated !== undefined) tags.push(args.isolated ? "isolated" : "shared");
@@ -2576,7 +2581,13 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 				});
 				if (writeLeaseHandle) {
 					const settlement = jobs.settled(record.id);
-					if (!settlement) throw new Error(`Background worker ${record.id} has no settlement handle; refusing to release checkout ownership early.`);
+					if (!settlement) {
+						// The worker already exists. Fail closed: deliberately orphan the
+						// handle while the process-global lease stays held, rather than let
+						// the outer catch release write ownership under a running writer.
+						writeLeaseHandle = undefined;
+						throw new Error(`Background worker ${record.id} has no settlement handle; checkout write ownership remains held because termination cannot be confirmed.`);
+					}
 					const transferredLease = writeLeaseHandle;
 					void settlement.finally(() => transferredLease.release());
 					writeLeaseHandle = undefined;
