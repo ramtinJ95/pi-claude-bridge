@@ -32,13 +32,17 @@ export interface AskClaudeCallRecord {
 	toolCallId: string;
 	/** ISO timestamp of the tool-call entry, when known. */
 	timestamp?: string;
-	/** Full original prompt from the persisted tool-call arguments (or live memory). */
+	/** Full original prompt/task from the persisted tool-call arguments (or live memory). */
 	prompt?: string;
 	details?: AskClaudeResultDetails;
 	isError?: boolean;
 	status: AskClaudeCallStatus;
 	/** True when this record comes from the in-memory live slot, not the session branch. */
 	live?: boolean;
+	/** Set for foreground SpawnClaudeAgent calls; absent on AskClaude compatibility calls. */
+	origin?: "spawn-foreground";
+	/** SpawnClaudeAgent profile of a foreground call, for labels only. */
+	profile?: string;
 }
 
 export interface LiveAskClaudeCall {
@@ -70,14 +74,17 @@ function deriveCallStatus(details: AskClaudeResultDetails | undefined, isError: 
 }
 
 /**
- * Read AskClaude tool-call/result pairs from real session-branch entries.
+ * Read foreground Claude call/result pairs from real session-branch entries:
+ * AskClaude compatibility calls plus, when `spawnToolName` is given, foreground
+ * SpawnClaudeAgent calls (persisted arguments carry `execution: "foreground"`;
+ * background spawns are represented by their job records instead).
  *
  * The assistant message's persisted `toolCall` arguments are the source for the
- * full original prompt; the paired `toolResult` message's `details` carry the
- * retained snapshot. Both survive session restore, so completed calls are
+ * full original prompt/task; the paired `toolResult` message's `details` carry
+ * the retained snapshot. Both survive session restore, so completed calls are
  * inspectable without any second persistence format.
  */
-export function extractAskClaudeCalls(entries: readonly unknown[], toolName: string): AskClaudeCallRecord[] {
+export function extractAskClaudeCalls(entries: readonly unknown[], toolName: string, spawnToolName?: string): AskClaudeCallRecord[] {
 	const records: AskClaudeCallRecord[] = [];
 	const byId = new Map<string, AskClaudeCallRecord>();
 	for (const raw of entries) {
@@ -88,13 +95,27 @@ export function extractAskClaudeCalls(entries: readonly unknown[], toolName: str
 			for (const block of message.content) {
 				if (!block || typeof block !== "object") continue;
 				const call = block as { type?: string; id?: string; name?: string; arguments?: Record<string, unknown> };
-				if (call.type !== "toolCall" || call.name !== toolName || typeof call.id !== "string") continue;
-				const record: AskClaudeCallRecord = {
-					toolCallId: call.id,
-					timestamp: entry.timestamp,
-					prompt: typeof call.arguments?.prompt === "string" ? call.arguments.prompt : undefined,
-					status: "unresolved",
-				};
+				if (call.type !== "toolCall" || typeof call.id !== "string") continue;
+				let record: AskClaudeCallRecord;
+				if (call.name === toolName) {
+					record = {
+						toolCallId: call.id,
+						timestamp: entry.timestamp,
+						prompt: typeof call.arguments?.prompt === "string" ? call.arguments.prompt : undefined,
+						status: "unresolved",
+					};
+				} else if (spawnToolName !== undefined && call.name === spawnToolName && call.arguments?.execution === "foreground") {
+					record = {
+						toolCallId: call.id,
+						timestamp: entry.timestamp,
+						prompt: typeof call.arguments?.task === "string" ? call.arguments.task : undefined,
+						status: "unresolved",
+						origin: "spawn-foreground",
+						...(typeof call.arguments?.profile === "string" ? { profile: call.arguments.profile } : {}),
+					};
+				} else {
+					continue;
+				}
 				records.push(record);
 				byId.set(call.id, record);
 			}
@@ -121,6 +142,9 @@ export function liveCallRecord(live: LiveAskClaudeCall): AskClaudeCallRecord {
 		// A live slot without a snapshot yet is a call that just started.
 		status: live.details.snapshot ? deriveCallStatus(live.details, false) : "running",
 		live: true,
+		// Foreground SpawnClaudeAgent calls publish their labels in details.
+		...(live.details.origin ? { origin: live.details.origin } : {}),
+		...(live.details.profile ? { profile: live.details.profile } : {}),
 	};
 }
 
@@ -197,8 +221,13 @@ export function buildOverlayHeaderLines(
 	const elapsed = details?.executionTime != null ? ` · ${(details.executionTime / 1000).toFixed(1)}s` : "";
 	const lines: string[] = [];
 
+	// Foreground SpawnClaudeAgent calls share this record shape but must not be
+	// labelled as AskClaude compatibility calls.
+	const title = record.origin === "spawn-foreground"
+		? `SpawnClaudeAgent ${record.profile ?? "agent"} (foreground)`
+		: "AskClaude call";
 	lines.push(
-		theme.fg(status.color, `${status.icon} ${theme.bold("AskClaude call")}`) +
+		theme.fg(status.color, `${status.icon} ${theme.bold(title)}`) +
 		theme.fg("muted", ` · record ${position.index + 1}/${position.total} · ${record.status}${record.live ? " (live)" : ""}${elapsed} · ${when}`),
 	);
 	const model = snapshot?.model

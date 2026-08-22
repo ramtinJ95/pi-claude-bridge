@@ -668,3 +668,70 @@ describe("unified overlay registration", () => {
 		assert.match(notifications[0].message, /requires the interactive TUI/);
 	});
 });
+
+describe("foreground SpawnClaudeAgent records in the unified list", () => {
+	function spawnForegroundEntry(id, timestamp) {
+		return messageEntry(
+			{ role: "assistant", content: [{ type: "toolCall", id, name: "SpawnClaudeAgent", arguments: { task: "fix the bug", profile: "worker", execution: "foreground" } }] },
+			timestamp,
+		);
+	}
+	function spawnForegroundResult(id) {
+		return messageEntry({
+			role: "toolResult",
+			toolCallId: id,
+			toolName: "SpawnClaudeAgent",
+			content: [{ type: "text", text: "done" }],
+			isError: false,
+			details: askDetails({ origin: "spawn-foreground", profile: "worker", capabilityMode: "full" }),
+		});
+	}
+	function mixedWithSpawn() {
+		return [
+			callEntry("call-1", "first ask", "2026-08-20T09:00:00.000Z"),
+			resultEntry("call-1", askDetails()),
+			spawnForegroundEntry("spawn-1", "2026-08-20T09:15:00.000Z"),
+			spawnForegroundResult("spawn-1"),
+			callEntry("call-2", "second ask", "2026-08-20T09:45:00.000Z"),
+			resultEntry("call-2", askDetails()),
+		];
+	}
+	const loadWithSpawn = () => mergeClaudeSessionRecords(
+		extractAskClaudeCalls(mixedWithSpawn(), "AskClaude", "SpawnClaudeAgent"),
+		[],
+	);
+
+	it("merges foreground spawn calls as foreground Claude records in chronological order", () => {
+		const records = loadWithSpawn();
+		assert.deepEqual(records.map((record) => record.id), [
+			"askclaude:call-1",
+			"askclaude:spawn-1",
+			"askclaude:call-2",
+		]);
+		assert.equal(records[1].call.origin, "spawn-foreground");
+	});
+
+	it("counts only actual AskClaude compatibility calls for /askclaude-details numbering", () => {
+		const records = loadWithSpawn();
+		// Latest AskClaude record is merged index 2, skipping the spawn record.
+		assert.equal(askClaudeOverlayFocus(records).index, 2);
+		assert.deepEqual(askClaudeOverlayFocus(records, 1), { index: 0, pinned: true });
+		assert.equal(askClaudeOverlayFocus(records, 2).index, 2, "call #2 skips the foreground spawn record");
+
+		const spawnOnly = mergeClaudeSessionRecords(
+			extractAskClaudeCalls([spawnForegroundEntry("spawn-1"), spawnForegroundResult("spawn-1")], "AskClaude", "SpawnClaudeAgent"),
+			[],
+		);
+		assert.deepEqual(askClaudeOverlayFocus(spawnOnly), { index: -1, pinned: false }, "spawn foreground calls are not AskClaude compatibility calls");
+	});
+
+	it("renders the spawn record body with a Task section over the same section renderer", () => {
+		const records = loadWithSpawn();
+		const spawnBody = buildSessionBodyLines(records[1], theme, 100);
+		assert.match(spawnBody.lines.join("\n"), /── Task ──/);
+		assert.deepEqual(spawnBody.sections.map((section) => section.title).slice(0, 2), ["Task", "Thinking"]);
+
+		const askBody = buildSessionBodyLines(records[0], theme, 100);
+		assert.equal(askBody.sections[0].title, "Prompt");
+	});
+});

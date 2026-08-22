@@ -19,7 +19,7 @@
 
 import { getMarkdownTheme, keyHint, type ExtensionAPI, type ExtensionContext, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import type { AgentProfileId } from "./agent-profiles.js";
+import { AGENT_PROFILE_IDS, type AgentProfileId } from "./agent-profiles.js";
 import type { BackgroundJobManager, BackgroundJobRecord, BackgroundJobStatus } from "./background-jobs.js";
 import type { DelegationSnapshot } from "./delegation-events.js";
 import {
@@ -81,7 +81,7 @@ function statusPresentation(status: BackgroundJobStatus): { icon: string; color:
 const BACKGROUND_JOB_STATUSES = new Set<BackgroundJobStatus>([
 	"running", "succeeded", "failed", "cancelled", "abandoned",
 ]);
-const AGENT_PROFILES = new Set<AgentProfileId>(["explorer", "reviewer"]);
+const AGENT_PROFILES = new Set<AgentProfileId>(AGENT_PROFILE_IDS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -151,8 +151,8 @@ export function currentJobAction(snapshot: DelegationSnapshot | undefined): stri
 
 /**
  * Compact live-widget lines for one running job: only Claude-job facts, at most
- * three lines, each truncated to the available width so the widget stays safe
- * in fullscreen and small terminals.
+ * four lines (the fourth is the worker single-writer warning), each truncated to
+ * the available width so the widget stays safe in fullscreen and small terminals.
  */
 export function buildBackgroundJobWidgetLines(
 	record: BackgroundJobRecord,
@@ -189,6 +189,10 @@ export function buildBackgroundJobWidgetLines(
 		"/claude-jobs cancel to stop",
 	].filter(Boolean).join(" · ");
 	lines.push(fit(`  ${theme.fg("muted", activity)}`));
+
+	if (record.profile === "worker") {
+		lines.push(fit(`  ${theme.fg("warning", "⚠ single-writer: this job edits the current checkout — do not edit files until it settles")}`));
+	}
 	return lines;
 }
 

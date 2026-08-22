@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_PROFILES, AGENT_PROFILE_IDS, buildAgentJobPrompt } from "../src/agent-profiles.js";
-import { resolveDelegationPolicy } from "../src/query-policy.js";
+import { AGENT_PROFILES, AGENT_PROFILE_IDS, READ_ONLY_AGENT_PROFILE_IDS, buildAgentJobPrompt } from "../src/agent-profiles.js";
+import { ASKCLAUDE_FULL_DISALLOWED_TOOLS, resolveDelegationPolicy } from "../src/query-policy.js";
 
 const READ_INVENTORY = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"];
 const FORBIDDEN = ["Bash", "Edit", "Write", "NotebookEdit", "NotebookRead", "Agent", "Task", "MultiEdit"];
@@ -21,14 +21,15 @@ function reviewerDiff(overrides = {}) {
 }
 
 describe("agent profiles", () => {
-	it("exposes exactly the explorer and reviewer profiles", () => {
-		assert.deepEqual([...AGENT_PROFILE_IDS], ["explorer", "reviewer"]);
-		assert.deepEqual(Object.keys(AGENT_PROFILES).sort(), ["explorer", "reviewer"]);
+	it("exposes exactly the explorer, reviewer, and worker profiles", () => {
+		assert.deepEqual([...AGENT_PROFILE_IDS], ["explorer", "reviewer", "worker"]);
+		assert.deepEqual([...READ_ONLY_AGENT_PROFILE_IDS], ["explorer", "reviewer"]);
+		assert.deepEqual(Object.keys(AGENT_PROFILES).sort(), ["explorer", "reviewer", "worker"]);
 		for (const id of AGENT_PROFILE_IDS) assert.equal(AGENT_PROFILES[id].id, id);
 	});
 
-	it("resolves both profiles to the explicit read inventory with no mutation or nested-agent tools", () => {
-		for (const id of AGENT_PROFILE_IDS) {
+	it("resolves the read-only profiles to the explicit read inventory with no mutation or nested-agent tools", () => {
+		for (const id of READ_ONLY_AGENT_PROFILE_IDS) {
 			const profile = AGENT_PROFILES[id];
 			assert.equal(profile.capabilityMode, "read");
 			const policy = resolveDelegationPolicy(profile.capabilityMode);
@@ -37,6 +38,46 @@ describe("agent profiles", () => {
 				assert.ok(!policy.tools.includes(tool), `${id} inventory must not include ${tool}`);
 			}
 		}
+	});
+
+	it("resolves the worker profile to the existing full Claude Code capability policy without hard-coded bypass", () => {
+		const profile = AGENT_PROFILES.worker;
+		assert.equal(profile.capabilityMode, "full");
+		assert.equal(profile.requiresDiffArtifact, false);
+		const policy = resolveDelegationPolicy(profile.capabilityMode);
+		// The same preset + disallowed list AskClaude full mode uses — no
+		// worker-specific tool list.
+		assert.deepEqual(policy.tools, { type: "preset", preset: "claude_code" });
+		assert.deepEqual(policy.disallowedTools, [...ASKCLAUDE_FULL_DISALLOWED_TOOLS]);
+		assert.equal(policy.requestedPermissionMode, "auto");
+		assert.equal(policy.allowDangerouslySkipPermissions, undefined);
+	});
+
+	it("honors the configured delegation permission mode for the worker policy", () => {
+		const policy = resolveDelegationPolicy("full", { permissionMode: "acceptEdits" });
+		assert.equal(policy.requestedPermissionMode, "acceptEdits");
+		assert.equal(policy.allowDangerouslySkipPermissions, undefined);
+	});
+
+	it("gives the worker an explicit current-checkout single-writer and no-git-side-effects contract", () => {
+		const prompt = AGENT_PROFILES.worker.rolePrompt;
+		assert.match(prompt, /current checkout/i);
+		assert.match(prompt, /only writer/i);
+		assert.match(prompt, /Do NOT commit, push, open pull requests/);
+		assert.match(prompt, /destructive cleanup/i);
+		assert.match(prompt, /unless the task explicitly authorizes/i);
+	});
+
+	it("builds a worker prompt with launch context and task but no diff section", () => {
+		const prompt = buildAgentJobPrompt({
+			profile: AGENT_PROFILES.worker,
+			task: "Rename the helper",
+			launch: { cwd: "/tmp/project", capturedAt: 1_700_000_000_000 },
+		});
+		assert.ok(prompt.includes(AGENT_PROFILES.worker.rolePrompt));
+		assert.ok(prompt.includes("Working directory: /tmp/project"));
+		assert.ok(prompt.includes("Task:\nRename the helper"));
+		assert.ok(!prompt.includes("Diff artifact"));
 	});
 
 	it("gives the profiles distinct role prompts and only the reviewer a diff requirement", () => {

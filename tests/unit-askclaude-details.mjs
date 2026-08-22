@@ -512,3 +512,80 @@ describe("AskClaude overlay registration", () => {
 		assert.equal(customCalls, 2, "Ctrl+N must close the replacement instead of opening a third overlay");
 	});
 });
+
+// --- Foreground SpawnClaudeAgent records ---
+
+function spawnCallEntry(id, args, timestamp) {
+	return messageEntry(
+		{ role: "assistant", content: [{ type: "toolCall", id, name: "SpawnClaudeAgent", arguments: args }] },
+		timestamp,
+	);
+}
+
+function spawnResultEntry(id, details, isError = false) {
+	return messageEntry({ role: "toolResult", toolCallId: id, toolName: "SpawnClaudeAgent", content: [{ type: "text", text: "answer" }], isError, details });
+}
+
+describe("foreground SpawnClaudeAgent extraction and labels", () => {
+	it("extracts foreground spawn calls as foreground records alongside AskClaude calls", () => {
+		const entries = [
+			callEntry("ask-1", "ask prompt", "AskClaude", "2026-08-20T09:00:00.000Z"),
+			resultEntry("ask-1", completedDetails()),
+			spawnCallEntry("spawn-1", { task: "fix the bug", profile: "worker", execution: "foreground" }, "2026-08-20T09:30:00.000Z"),
+			spawnResultEntry("spawn-1", completedDetails({ origin: "spawn-foreground", profile: "worker", capabilityMode: "full" })),
+		];
+		const records = extractAskClaudeCalls(entries, "AskClaude", "SpawnClaudeAgent");
+		assert.equal(records.length, 2);
+		assert.equal(records[0].origin, undefined);
+		assert.equal(records[1].origin, "spawn-foreground");
+		assert.equal(records[1].profile, "worker");
+		assert.equal(records[1].prompt, "fix the bug", "the spawn call's prompt is its task argument");
+		assert.equal(records[1].status, "completed");
+	});
+
+	it("ignores background spawn calls and everything without a spawn tool name", () => {
+		const background = [
+			spawnCallEntry("spawn-bg", { task: "explore", profile: "explorer" }),
+			spawnCallEntry("spawn-bg2", { task: "explore", profile: "explorer", execution: "background" }),
+			spawnCallEntry("spawn-fg", { task: "fix", profile: "worker", execution: "foreground" }),
+		];
+		assert.equal(extractAskClaudeCalls(background, "AskClaude", "SpawnClaudeAgent").length, 1);
+		// Without the spawn tool name (restored sessions of older versions), only AskClaude records appear.
+		assert.equal(extractAskClaudeCalls(background, "AskClaude").length, 0);
+	});
+
+	it("labels spawn-foreground records distinctly from AskClaude compatibility calls", () => {
+		const [record] = extractAskClaudeCalls([
+			spawnCallEntry("spawn-1", { task: "fix", profile: "worker", execution: "foreground" }),
+			spawnResultEntry("spawn-1", completedDetails({ origin: "spawn-foreground", profile: "worker" })),
+		], "AskClaude", "SpawnClaudeAgent");
+		const header = buildOverlayHeaderLines(record, { index: 0, total: 1 }, theme).join("\n");
+		assert.match(header, /SpawnClaudeAgent worker \(foreground\)/);
+		assert.ok(!header.includes("AskClaude call"));
+
+		const [ask] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "AskClaude");
+		assert.match(buildOverlayHeaderLines(ask, { index: 0, total: 1 }, theme).join("\n"), /AskClaude call/);
+	});
+
+	it("carries the labels through the live slot for a running foreground spawn call", () => {
+		updateLiveAskClaudeCall({
+			toolCallId: "spawn-live",
+			startedAt: Date.parse("2026-08-20T10:00:00.000Z"),
+			prompt: "live task",
+			details: { prompt: "live task", executionTime: 0, origin: "spawn-foreground", profile: "explorer" },
+		});
+		const record = liveCallRecord(getLiveAskClaudeCall());
+		assert.equal(record.origin, "spawn-foreground");
+		assert.equal(record.profile, "explorer");
+		assert.equal(record.status, "running");
+
+		// The live record also merges into a branch that already persisted the tool call.
+		const pending = extractAskClaudeCalls([
+			spawnCallEntry("spawn-live", { task: "live task", profile: "explorer", execution: "foreground" }),
+		], "AskClaude", "SpawnClaudeAgent");
+		const merged = mergeLiveCall(pending, getLiveAskClaudeCall());
+		assert.equal(merged.length, 1);
+		assert.equal(merged[0].live, true);
+		assert.equal(merged[0].origin, "spawn-foreground");
+	});
+});

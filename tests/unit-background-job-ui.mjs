@@ -11,6 +11,7 @@ import {
 	buildCompletionEntryData,
 	buildCompletionMessageText,
 	buildJobStatusLines,
+	isRenderableCompletionData,
 	registerBackgroundJobUI,
 	renderBackgroundJobCompletion,
 } from "../src/background-job-ui.js";
@@ -228,6 +229,38 @@ describe("background job live widget", () => {
 		const wide = buildBackgroundJobWidgetLines(record, theme, 200, 754_000).join("\n");
 		assert.match(wide, /12m34s/);
 		assert.match(wide, /1 denied/);
+	});
+
+	it("adds the single-writer warning line for worker jobs only", () => {
+		const base = {
+			id: "claude-job-t-1",
+			task: "work",
+			requestedModel: "opus",
+			status: "running",
+			createdAt: 0,
+			launch: { cwd: "/tmp/project", capturedAt: 0 },
+		};
+		const worker = buildBackgroundJobWidgetLines({ ...base, profile: "worker" }, theme, 200, 1000);
+		assert.equal(worker.length, 4);
+		assert.match(worker.join("\n"), /Claude worker job/);
+		assert.match(worker[3], /single-writer/);
+		assert.match(worker[3], /do not edit files/);
+
+		const explorer = buildBackgroundJobWidgetLines({ ...base, profile: "explorer" }, theme, 200, 1000);
+		assert.equal(explorer.length, 3);
+		assert.ok(!explorer.join("\n").includes("single-writer"));
+	});
+
+	it("validates persisted worker completion entries as renderable", () => {
+		assert.equal(isRenderableCompletionData({
+			jobId: "claude-job-t-1",
+			profile: "worker",
+			status: "succeeded",
+			task: "work",
+			requestedModel: "opus",
+			createdAt: 1,
+			launchCwd: "/tmp/project",
+		}), true);
 	});
 
 	it("renders nothing and stops observing after dispose", async () => {
