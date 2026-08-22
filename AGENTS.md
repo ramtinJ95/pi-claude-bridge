@@ -61,8 +61,8 @@ No build step — the package ships `src` TypeScript as-is (see `files` in `pack
 1. **Changelog** — rename the `## UNRELEASED` section to `## X.Y.Z — YYYY-MM-DD`.
 2. **Bump** — set `version` to `X.Y.Z` in `package.json`.
 3. **Commit** — `git commit -m "Release X.Y.Z"` (changelog + package.json only).
-4. **Tag** — `git tag vX.Y.Z` (note the `v` prefix).
-5. **Push commit and tag together** — `git push --follow-tags`. 
+4. **Tag** — `git tag pi-claude-delegation-vX.Y.Z`. The namespace avoids collisions with inherited `pi-claude-bridge` tags.
+5. **Push commit and tag together** — `git push origin main pi-claude-delegation-vX.Y.Z`.
 6. **Publish** — `npm login` and `npm publish`.
 
 ## Tests
