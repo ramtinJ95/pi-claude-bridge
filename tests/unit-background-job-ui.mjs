@@ -334,7 +334,7 @@ describe("/claude-jobs command", () => {
 		const ctx = { mode: "print", ui: fakeUI() };
 		await pi.commands.get("claude-jobs").handler("", ctx);
 		assert.equal(overlayOpens, 0);
-		assert.match(ctx.ui.notifications[0].message, new RegExp(`${record.id} — explorer · succeeded after`));
+		assert.match(ctx.ui.notifications[0].message, new RegExp(`${record.id} — explorer · mode read · succeeded after`));
 	});
 
 	it("keeps cancellation textual and unchanged when the overlay handle is wired", async () => {
@@ -366,10 +366,10 @@ describe("/claude-jobs command", () => {
 		const ctx = { ui: fakeUI() };
 		await pi.commands.get("claude-jobs").handler("", ctx);
 		const listing = ctx.ui.notifications[0].message;
-		assert.match(listing, new RegExp(`${done.id} — explorer · succeeded after`));
-		assert.match(listing, new RegExp(`${failed.id} — explorer · failed after`));
+		assert.match(listing, new RegExp(`${done.id} — explorer · mode read · succeeded after`));
+		assert.match(listing, new RegExp(`${failed.id} — explorer · mode read · failed after`));
 		assert.match(listing, /error: exploded/);
-		assert.match(listing, new RegExp(`${running.id} — explorer · running`));
+		assert.match(listing, new RegExp(`${running.id} — explorer · mode read · running`));
 		assert.match(listing, /thinking low/);
 		assert.match(listing, /\/claude-jobs cancel/);
 
@@ -447,7 +447,7 @@ describe("exactly-once completion delivery", () => {
 		assert.equal(message.customType, BACKGROUND_JOB_MESSAGE_TYPE);
 		assert.equal(message.display, false);
 		assert.deepEqual(message.details, { jobId: record.id, profile: "explorer", status: "succeeded" });
-		assert.match(message.content, new RegExp(`Background Claude job ${record.id} \\(explorer\\) completed`));
+		assert.match(message.content, new RegExp(`Background Claude job ${record.id} \\(read, explorer\\) completed`));
 		assert.match(message.content, /the findings/);
 		// The exact Pi 0.84.2 non-triggering delivery contract.
 		assert.deepEqual(options, { triggerTurn: false, deliverAs: "nextTurn" });
@@ -699,8 +699,8 @@ describe("job status lines", () => {
 		};
 		const done = { ...running, id: "claude-job-t-2", status: "succeeded", endedAt: 30_000 };
 		const lines = buildJobStatusLines([done, running], 90_000);
-		assert.match(lines[0], /claude-job-t-2 — explorer · succeeded after 30s/);
-		assert.match(lines[1], /claude-job-t-3 — explorer · running 1m30s/);
+		assert.match(lines[0], /claude-job-t-2 — explorer · mode read · succeeded after 30s/);
+		assert.match(lines[1], /claude-job-t-3 — explorer · mode read · running 1m30s/);
 		assert.match(lines[2], /\/claude-jobs cancel/);
 
 		const settledOnly = buildJobStatusLines([done], 90_000);

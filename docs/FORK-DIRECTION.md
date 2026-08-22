@@ -26,11 +26,13 @@ The fork should make Claude Code delegation observable, policy-correct, and
 capable of running independent background agents without expanding Pi's native
 tool surface unnecessarily.
 
-The intended experience now centers on `SpawnClaudeAgent`: profile selects the
-capability (`explorer`, `reviewer`, or `worker`) and execution selects
-foreground/blocking or background/nonblocking delivery. `AskClaude` remains a
-temporary compatibility surface for its free-form `none`/`read`/`full` contract
-while runtime parity and removal UX are evaluated.
+The intended experience now centers on `SpawnClaudeAgent`: `mode` selects the
+same explicit `none`/`read`/`full` capability contract as AskClaude, optional
+`review` specializes read mode with a frozen launch diff, and `execution`
+selects foreground/blocking or background/nonblocking delivery. Advisor,
+explorer, reviewer, and worker are derived role/presentation labels rather than
+capability inputs. `AskClaude` remains a temporary compatibility surface while
+runtime parity and removal UX are evaluated.
 
 Pi's existing `spawn_agent` remains separate and Pi-native. This fork will not
 turn it into a model-selection mechanism or silently route it through Claude.
@@ -93,10 +95,13 @@ Tests must cover non-package defaults, especially:
 - `defaultIsolated: true`
 - Explicit `false` overriding a configured `true`
 
-### 4. Rich `AskClaude` observability
+### 4. Rich foreground-delegation observability
 
-The blocking tool should expose substantially more of the Claude Code session
-without forcing all of it into the main model's context.
+Foreground Claude delegation should expose substantially more of the Claude
+Code session without forcing all of it into the main model's context. This was
+first built for `AskClaude`; foreground `SpawnClaudeAgent` now uses the same
+runner, retained event model, live updates, and unified details overlay rather
+than maintaining a second observability path.
 
 The TUI should support:
 
@@ -136,14 +141,19 @@ pairing, attachments, cursor management, and divergent histories.
 Background execution returns promptly with a job identifier so the main agent
 can continue; foreground execution blocks and returns the result directly.
 
-Profiles:
+Public capability contract:
 
-- `explorer`: repository reading/search and appropriate web research; no edits.
-- `reviewer`: repository and diff inspection; no edits.
-- `worker`: full Claude Code capability in the current checkout, available only
-  for explicit user-requested implementation delegation.
+- `mode: "none"`: advisor role with no repository, filesystem, shell, agent, or
+  web capabilities.
+- `mode: "read"`: explorer role with structural repository/web read-only
+  capability.
+- `mode: "read", review: { base?: string }`: reviewer role with the same
+  structural read capability plus a frozen launch-time diff artifact.
+- `mode: "full"`: worker role with full Claude Code capability in the current
+  checkout, available only for explicit user-requested implementation
+  delegation.
 
-All profiles:
+All derived roles:
 
 - Use `permissionMode: "auto"` by default.
 - Run in independent Claude sessions by default.
@@ -153,45 +163,58 @@ All profiles:
 - Can run in foreground or background; foreground may explicitly share Pi
   conversation history.
 
-Explorer and reviewer remain structurally read-only. Worker mutation uses one
+None/read modes remain structurally bounded. Full-mode mutation uses one
 process-global checkout lease shared with AskClaude full mode, so concurrent
 Claude writers fail visibly, including across extension reload. A background
-worker also exposes a single-writer warning requiring the main agent to avoid
+full-mode worker also exposes a single-writer warning requiring the main agent to avoid
 mutating the checkout until the worker actually settles.
 
-### 7. Keep lifecycle operations out of Pi's native tool list
+### 7. Use one explicit background-job control tool
 
-Do not register separate first-class Pi tools for status, result retrieval, and
-cancellation.
+Register one small first-class Pi tool, provisionally named `ClaudeAgentJob`,
+for model-initiated lifecycle operations on background jobs that already
+exist. It supports `status`, `result`, and `cancel` actions and delegates
+directly to the session-scoped in-memory job manager.
 
-Expose lower-frequency lifecycle operations as `pi-codex-conversion` code-mode
-custom tools, callable through `exec`, for example:
+Keep this separate from `SpawnClaudeAgent`:
 
-```js
-await tools.claude_agent_status(...)
-await tools.claude_agent_result(...)
-await tools.claude_agent_cancel(...)
-```
+- `SpawnClaudeAgent` creates work. It either starts a background job and
+  returns its ID or runs a foreground delegation to completion.
+- `ClaudeAgentJob` never creates work. It inspects, retrieves, or cancels a
+  background job identified by that ID.
 
-Use `defer_loading = true` where practical so these operations do not add usage
-text to the normal system prompt and remain discoverable through `ALL_TOOLS`.
+This separation keeps both schemas small and honest. Do not overload
+`SpawnClaudeAgent` with a conditional create-or-manage contract, and do not add
+three separate status/result/cancel tools.
 
-The extension and command-backed custom tools need one small authenticated IPC
-protocol over the extension's session-scoped in-memory job manager. Endpoint
-discovery metadata may be written locally, but job durability must not be
-implied: a stale endpoint must fail clearly as unavailable rather than appearing
-to own recoverable jobs. Do not use untracked detached processes or treat PID
-files alone as a job protocol.
+The control tool calls the existing manager in-process. Do not add local IPC,
+socket authentication, endpoint discovery, command clients, TOML definitions,
+or a second job store unless a future requirement genuinely needs out-of-process
+control. The earlier deferred `pi-codex-conversion` custom-tool design is
+superseded by this simpler architecture.
+
+Control behavior remains bounded and explicit:
+
+- `status` returns concise lifecycle and current-activity facts; without a job
+  ID it may list the manager's bounded session records.
+- `result` requires a job ID and returns the same bounded/redacted result shape
+  used by completion delivery. A running job returns an explicit not-ready
+  state rather than partial narration presented as a final result.
+- `cancel` requires a job ID and only confirms that cancellation was requested.
+  The job becomes `cancelled` only when the executor actually settles; otherwise
+  the manager's existing shutdown/abandonment rules remain authoritative.
+- Unknown, evicted, foreground, or prior-runtime job IDs fail visibly as
+  unavailable. The tool does not imply persistence across session shutdown.
 
 ### 8. Background state belongs in the UI, not model polling
 
 Show active Claude jobs in a persistent Pi panel or widget with elapsed time,
-current action, profile, model, token usage, and completion state. Human status
+current action, capability mode, derived role, model, token usage, and completion state. Human status
 inspection and cancellation should also be available through TUI commands or
 keybindings without consuming model context.
 
-Model-driven polling remains optional through the deferred code-mode tools. It
-must not be the normal completion path.
+Model-driven inspection through `ClaudeAgentJob` is optional. It must not become
+a polling loop or replace the normal bounded next-turn completion delivery.
 
 ### 9. Target Pi 0.84.2 and honor its provider contracts
 
@@ -265,9 +288,9 @@ runner:
   parsing where doing so removes real duplication.
 
 Do not reuse provider `QueryContext` or MCP result-routing machinery for
-background jobs. Do not introduce a profile/plugin framework, generic event-bus
-package, repository layer, or persistence abstraction for the initial two
-profiles and session-scoped job store.
+background jobs. Do not introduce a role/plugin framework, generic event-bus
+package, repository layer, or persistence abstraction for four fixed derived
+roles and the session-scoped job store.
 
 ## Internal architecture
 
@@ -318,24 +341,26 @@ adapters:
 - Own background query lifecycle, cancellation, bounded in-memory records, and
   cleanup on Pi session shutdown.
 - Snapshot launch context and working directory.
-- Expose a stable in-process contract that a later IPC adapter can call.
+- Expose the stable in-process contract used by the UI and the lifecycle tool.
 - Make terminal states explicit: succeeded, failed, cancelled, or abandoned.
 
 ### Pi adapter and UI
 
-- Register the provider, `AskClaude`, and `SpawnClaudeAgent`.
+- Register the provider, `AskClaude`, `SpawnClaudeAgent`, and the single
+  `ClaudeAgentJob` lifecycle tool while the compatibility surface remains.
 - Render blocking sessions and background jobs from the same normalized event
   model.
 - Keep verbose details expandable and outside model context by default.
 
-### Code-mode custom-tool adapter
+### Background-job control adapter
 
-- Provide deferred status, result, and cancellation commands through
-  `pi-codex-conversion`.
-- Communicate only through the job manager's supported IPC contract.
-- Return concise, bounded machine-readable results.
-- Treat an absent or stale extension endpoint as an explicit unavailable state;
-  it does not recover jobs from a prior Pi process.
+- Provide status, result, and cancellation actions through one narrow Pi tool.
+- Read and mutate lifecycle only through `BackgroundJobManager`; never cache or
+  reconstruct a parallel view of job state.
+- Reuse the existing retained snapshots, completion-result assembly, and
+  redaction/size limits rather than introducing another serializer.
+- Return concise model-facing results; rich inspection remains in the unified
+  Claude Sessions overlay.
 
 ## Delivery status and handoff
 
@@ -362,49 +387,65 @@ PR #11 validation is 447 passing unit tests, clean TypeScript typecheck and
 `git diff --check`, and a package dry-run containing the new lease module.
 Runtime dogfooding has not yet been recorded.
 
-### Current handoff: dogfood Phase 3c
+### Phase 3d in progress: consolidate SpawnClaudeAgent capability
+
+Before Phase 4, replace SpawnClaudeAgent's public `profile` input with the same
+explicit `none | read | full` capability modes AskClaude uses. Keep review as
+an optional read-only specialization (`review: { base?: string }`) because a
+frozen diff and review role prompt are task shaping, not another capability
+mode. Derive advisor/explorer/reviewer/worker labels for prompts and UI only.
+
+This gives foreground SpawnClaudeAgent behavioral parity with AskClaude's
+capability vocabulary while preserving background execution, explicit full-mode
+authorization, reviewer artifact capture, and every existing lease/lifecycle
+invariant. Keep AskClaude registered through the runtime gate; removal is a
+separate compatibility change, not part of the contract migration.
+
+### Current handoff: dogfood Phase 3d
 
 This checkout is loaded directly from
 `/Users/ramtin/personal/pi-claude-bridge`; after local `main` is updated,
-`/reload` activates Phase 3c. Start Pi from the repository root for reviewer
-tests because reviewer diff capture deliberately fails outside a Git worktree.
+`/reload` activates Phase 3d. Start Pi from the repository root for review tests
+because diff capture deliberately fails outside a Git worktree.
 
 Run these checks in order and record observed results here:
 
-1. **Reviewer/background baseline:** run a real reviewer, reject a concurrent
-   background spawn, reject an invalid `base`, and confirm one bounded result
-   arrives on a later turn.
-2. **Foreground worker:** use a harmless explicit edit with
+1. **Capability mapping:** run `mode: "none"` and confirm an advisor has no
+   tools; run `mode: "read"` and confirm an explorer has only the structural
+   read inventory. Check both foreground and background dispatch at least once.
+2. **Review specialization:** run `mode: "read", review: {}` and
+   `review: { base: "main" }`; reject review with none/full mode and reject an
+   invalid base. Confirm one bounded background result arrives on a later turn.
+3. **Foreground full mode:** use a harmless explicit edit with
    `user_requested: true`, first isolated and then shared
    (`isolated: false`). Confirm live row updates, direct result delivery,
    correct cwd/permission metadata, and foreground records in the unified
    overlay.
-3. **Background worker ownership:** run one harmless worker and confirm the
+4. **Background full-mode ownership:** run one harmless worker and confirm the
    spawn/widget warning. While it runs, verify a second background worker,
    foreground worker, and AskClaude full call all fail on the same checkout
    lease. Cancel mid-edit and confirm the lease releases only after real
    settlement.
-4. **Reload/termination:** reload during a long worker. Confirm the SDK child is
+5. **Reload/termination:** reload during a long worker. Confirm the SDK child is
    gone, no orphan keeps editing, and a replacement runtime cannot acquire the
    writer lease before the old executor settles.
-5. **Restore and layout:** resume the session and inspect mixed AskClaude,
+6. **Restore and layout:** resume the session and inspect mixed AskClaude,
    foreground SpawnClaudeAgent, and background records through `Ctrl+N`,
    `/claude-details`, and `/claude-jobs`; check small-terminal and fullscreen
    rendering.
-6. **Negative contracts:** reject background `isolated: false`, reject worker
-   calls without `user_requested: true`, and confirm `allowFullMode: false`
-   removes/rejects the worker profile.
+7. **Negative contracts:** reject background `isolated: false`, reject full
+   calls without `user_requested: true`, reject that assertion in none/read
+   mode, and confirm `allowFullMode: false` removes/rejects full mode.
 
 A real Opus/high explorer job already confirmed nonblocking execution, the live
 widget, structural read-only tools, and later-turn result delivery. Do not
 repeat that run unless another change touches those paths.
 
-After the gate passes, decide whether to remove AskClaude. SpawnClaudeAgent
-foreground covers blocking, telemetry, and shared-session behavior, but there
-is intentionally no profile equivalent of AskClaude `mode: "none"`; either add
-an advisor/no-access profile or explicitly drop that use case. Then proceed to
-Phase 4. Do not begin IPC work while worker termination or write ownership is
-still uncertain.
+After the gate passes, proceed to Phase 4. SpawnClaudeAgent foreground now
+covers AskClaude's none/read/full capability vocabulary, blocking delivery,
+telemetry, and shared-session behavior. AskClaude removal does not need to block
+the lifecycle tool, but its deprecation/removal timeline must be decided and
+documented separately.
 
 ### Deferred Herdr investigation
 
@@ -415,14 +456,62 @@ viewport scraping, owned cancellation/cleanup, and the same policy/retention
 guarantees as the SDK path. It must be visibly unavailable outside Herdr and
 must never silently replace or fall back from the structured SDK backend.
 
-### Phase 4: dynamic lifecycle tools
+### Phase 4: one background-job control tool
 
-- Add deferred `pi-codex-conversion` code-mode tools for bounded status, result,
-  and cancellation without expanding Pi's first-class model tool list.
-- Add authenticated local IPC and per-session endpoint discovery over the
-  in-memory manager.
-- Test concurrent Pi sessions, stale endpoints, bounded replies, and explicit
-  unavailability after session shutdown.
+Phase 4 adds control over the background execution built in Phase 3; it does
+not add another runner, capability mode, persistence layer, or UI.
+
+Implement it as one PR with three reviewable commits:
+
+1. **Pure contract and result shaping**
+   - Define the `status | result | cancel` request contract and explicit success,
+     not-ready, unavailable, and rejected outcomes.
+   - Reuse retained `BackgroundJobRecord` data and the existing bounded result
+     assembler; extract presentation-neutral helpers from the UI module only
+     where necessary.
+   - Unit-test malformed actions, missing/unknown IDs, running and terminal
+     states, evicted records, truncation, and cancellation races.
+2. **Pi tool adapter**
+   - Register `ClaudeAgentJob` only when Claude delegation is enabled.
+   - Keep its schema concise: optional `job_id` for `status`, required for
+     `result` and `cancel` at runtime.
+   - Route directly to the existing manager. Cancellation means requested, not
+     settled; terminal state remains first-wins in the manager.
+   - A full-mode worker's cancel response must repeat that checkout write
+     ownership remains in force until actual settlement.
+   - Update SpawnClaudeAgent's temporary "there are no status/result/cancel
+     tools" descriptions and result text in the same commit so the model never
+     receives contradictory instructions.
+   - Promote rejected operations to visible Pi tool errors without turning
+     ordinary `running/not-ready` status into an error.
+3. **Documentation and runtime verification**
+   - Document the distinction between spawning and controlling a job.
+   - Verify status while running, bounded result after success/failure/cancel,
+     cancellation settlement, unknown IDs, restore/reload unavailability, and
+     that completion still arrives exactly once without polling.
+
+Contract details settled by the design review:
+
+- Unknown/evicted/prior-runtime IDs and cancellation of a terminal job are
+  visible errors; terminal cancellation includes the actual status.
+- Repeated cancellation while a job remains running is idempotent success.
+- `result` on a running job is a non-error not-ready outcome and reminds the
+  model that completion arrives automatically.
+- A no-ID `status` listing is a bounded facts-only summary; never concatenate
+  retained task bodies across the manager's record limit.
+- Explicit result retrieval does not consume or suppress an already queued
+  automatic next-turn completion. Duplicate visibility is acceptable and must
+  be stated rather than coupling the control tool to UI delivery state.
+
+The intended gain is operational control with very little new architecture:
+the main agent can check a long job when that is genuinely useful, recover its
+bounded result while it remains in the manager, or cancel work that is no
+longer wanted. Humans continue to use the widget, `Ctrl+N`, `/claude-details`,
+and `/claude-jobs`; automatic next-turn delivery remains the normal model path.
+
+Do not begin Phase 4 implementation until Phase 3d dogfooding confirms worker
+termination and checkout-write ownership. Those are safety preconditions for
+exposing model-initiated cancellation, not optional polish.
 
 ### Phase 5: independent packaging
 
@@ -435,7 +524,8 @@ must never silently replace or fall back from the structured SDK backend.
 - Reimplementing the existing session bridge from scratch.
 - Circumventing organization-managed Claude policy or sandbox controls.
 - Replacing or overloading Pi's native `spawn_agent`.
-- Adding first-class Pi tools for every background lifecycle operation.
+- Adding one first-class Pi tool per background lifecycle operation, or
+  overloading `SpawnClaudeAgent` with unrelated lifecycle actions.
 - Exposing or claiming access to private/raw chain-of-thought.
 - Allowing multiple Claude delegations to mutate the checkout concurrently or
   releasing write ownership before an executor actually settles.
@@ -450,18 +540,16 @@ must never silently replace or fall back from the structured SDK backend.
 
 These implementation and later-product decisions remain open:
 
-1. **AskClaude compatibility:** after Phase 3c dogfooding, either add a
-   no-access/advisor SpawnClaudeAgent profile or explicitly drop AskClaude
-   `mode: "none"`, then decide the compatibility removal timeline.
+1. **AskClaude compatibility:** after Phase 3d dogfooding confirms
+   SpawnClaudeAgent parity for none/read/full foreground calls, decide the
+   AskClaude deprecation and removal timeline.
 2. **Launch cwd:** decide whether repository-root Pi startup remains the
    reviewer contract or SpawnClaudeAgent needs an explicit cwd parameter.
-3. **IPC transport:** choose a Unix-domain socket, localhost authenticated
-   endpoint, or another explicit protocol for code-mode lifecycle tools.
-4. **Provider scope:** decide how much rich telemetry and UI from delegation
+3. **Provider scope:** decide how much rich telemetry and UI from delegation
    should also apply when Claude Bridge is selected as Pi's primary provider.
-5. **Herdr backend:** decide from a live probe whether its lifecycle/result
+4. **Herdr backend:** decide from a live probe whether its lifecycle/result
    contract is reliable enough to support as an explicit optional backend.
-6. **Independent name:** choose a package, provider, and config namespace only
+5. **Independent name:** choose a package, provider, and config namespace only
    after the architecture has materially diverged.
 
 ## Load-bearing invariants
@@ -470,8 +558,8 @@ These implementation and later-product decisions remain open:
 - Session rebuilds must preserve valid tool-use/tool-result pairing.
 - A background job operates on the context and working directory captured when
   it starts, not mutable ambient state.
-- Read-only profiles must be enforced by available tools, not merely requested
-  in prose.
+- None/read capability modes must be enforced by available tools, not merely
+  requested in role prose.
 - Every full-capability Claude delegation must hold the process-global checkout
   write lease until its executor actually settles.
 - Managed Claude policy always wins over user or extension preferences.

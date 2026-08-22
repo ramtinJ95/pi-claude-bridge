@@ -20,6 +20,7 @@ import {
 	UNAVAILABLE,
 } from "./askclaude-details.js";
 import type { AskClaudeResultDetails, RenderTheme } from "./askclaude-ui.js";
+import { agentCapabilityMode } from "./agent-profiles.js";
 import type { BackgroundJobRecord, BackgroundJobStatus } from "./background-jobs.js";
 import {
 	BACKGROUND_JOB_ENTRY_TYPE,
@@ -254,6 +255,7 @@ function backgroundHeaderLines(
 		];
 	}
 	const snapshot = data.snapshot;
+	const mode = agentCapabilityMode(data.profile) ?? UNAVAILABLE;
 	const status = statusPresentation(backgroundCallStatus(data.status));
 	const when = Number.isFinite(data.createdAt) ? new Date(data.createdAt).toLocaleString() : UNAVAILABLE;
 	const elapsed = formatJobElapsed((data.endedAt ?? nowMs) - data.createdAt);
@@ -273,7 +275,7 @@ function backgroundHeaderLines(
 			? `${data.permission.requested} → ${data.permission.effective}`
 			: data.permission.effective
 		: snapshot?.runtimePermissionMode ?? UNAVAILABLE;
-	lines.push(theme.fg("dim", `model: ${model} · session: ${snapshot?.sessionId ?? UNAVAILABLE} · permission: ${permission}`));
+	lines.push(theme.fg("dim", `mode: ${mode} · model: ${model} · session: ${snapshot?.sessionId ?? UNAVAILABLE} · permission: ${permission}`));
 	lines.push(theme.fg("dim", `cwd: ${data.launchCwd}${data.diffSource ? ` · diff: ${data.diffSource}` : ""}`));
 	lines.push(theme.fg("dim", usageText(snapshot)));
 	lines.push(theme.fg("dim", [
@@ -298,6 +300,7 @@ function backgroundCallRecord(record: BackgroundSessionRecord): AskClaudeCallRec
 	if (!data) return undefined;
 	const details: AskClaudeResultDetails = {
 		prompt: data.task,
+		capabilityMode: agentCapabilityMode(data.profile),
 		executionTime: data.endedAt !== undefined ? data.endedAt - data.createdAt : undefined,
 		requestedModel: data.requestedModel,
 		thinking: data.thinking,

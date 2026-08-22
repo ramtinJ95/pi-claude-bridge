@@ -69,7 +69,7 @@ function wire(overrides = {}) {
 	const writeLease = new CheckoutWriteLease();
 	const deps = {
 		enabled: true,
-		allowWorker: true,
+		allowFull: true,
 		writeLease,
 		jobs,
 		captureDiff: async (input) => {
@@ -119,7 +119,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 
 	it("returns the job ID before the injected background executor settles", async () => {
 		const { pi, jobs, captures, runs } = wire();
-		const result = await execute(pi, { task: "map the module graph", profile: "explorer" });
+		const result = await execute(pi, { task: "map the module graph", mode: "read" });
 
 		// The executor is still pending — the tool already answered.
 		assert.equal(runs.length, 1);
@@ -137,10 +137,10 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 		const { pi, captures, runs } = wire();
 		const result = await execute(pi, {
 			task: "review the change",
-			profile: "reviewer",
+			mode: "read",
+			review: { base: "main" },
 			model: "sonnet",
 			thinking: "high",
-			base: "main",
 		});
 
 		assert.deepEqual(captures, [{ cwd: "/repo", base: "main", capturedAt: 42 }]);
@@ -168,15 +168,15 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 				diffTruncated: false,
 			}),
 		});
-		const result = await execute(pi, { task: "review", profile: "reviewer" });
+		const result = await execute(pi, { task: "review", mode: "read", review: {} });
 		assert.equal(result.details.error, undefined);
 		assert.equal(result.details.diffArtifactTruncated, true);
 	});
 
 	it("promotes a second concurrent spawn to an error without paying for diff capture", async () => {
 		const { pi, captures } = wire();
-		const first = await execute(pi, { task: "explore", profile: "explorer" });
-		const second = await execute(pi, { task: "review", profile: "reviewer" });
+		const first = await execute(pi, { task: "explore", mode: "read" });
+		const second = await execute(pi, { task: "review", mode: "read", review: {} });
 
 		assert.equal(second.details.error, true);
 		assert.ok(second.content[0].text.includes(first.details.jobId));
@@ -188,7 +188,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 		const { pi, jobs, runs } = wire({
 			captureDiff: async () => { throw new Error('Invalid comparison base "nope": not a commit in this repository.'); },
 		});
-		const result = await execute(pi, { task: "review", profile: "reviewer", base: "nope" });
+		const result = await execute(pi, { task: "review", mode: "read", review: { base: "nope" } });
 
 		assert.equal(result.details.error, true);
 		assert.ok(result.content[0].text.includes('Invalid comparison base "nope"'));
@@ -200,7 +200,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 		const { pi, jobs, captures, runs } = wire();
 		const controller = new AbortController();
 		controller.abort();
-		const result = await execute(pi, { task: "review", profile: "reviewer" }, { signal: controller.signal });
+		const result = await execute(pi, { task: "review", mode: "read", review: {} }, { signal: controller.signal });
 
 		assert.equal(result.details.error, true);
 		assert.ok(result.content[0].text.includes("cancelled"));
@@ -217,7 +217,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 				return { ...DIFF_ARTIFACT, cwd: input.cwd, capturedAt: input.capturedAt };
 			},
 		});
-		const result = await execute(pi, { task: "review", profile: "reviewer" }, { signal: controller.signal });
+		const result = await execute(pi, { task: "review", mode: "read", review: {} }, { signal: controller.signal });
 
 		assert.equal(result.details.error, true);
 		assert.ok(result.content[0].text.includes("cancelled during launch capture"));
@@ -228,7 +228,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 	it("hands the running job to its own controller — the tool-call signal plays no further part", async () => {
 		const { pi, jobs, runs } = wire();
 		const controller = new AbortController();
-		await execute(pi, { task: "explore", profile: "explorer" }, { signal: controller.signal });
+		await execute(pi, { task: "explore", mode: "read" }, { signal: controller.signal });
 
 		controller.abort();
 		assert.equal(runs[0].signal.aborted, false);
@@ -240,7 +240,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 
 	it("wires session shutdown and session-start reset cleanup", async () => {
 		const { pi, jobs } = wire();
-		await execute(pi, { task: "explore", profile: "explorer" });
+		await execute(pi, { task: "explore", mode: "read" });
 		assert.equal(jobs.get("claude-job-t-1").status, "running");
 
 		// The executor never settles and the injected sleep is instant, so the
@@ -262,7 +262,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 
 	it("keeps the claude-bridge circular-delegation block", async () => {
 		const { pi, jobs, runs } = wire();
-		const result = await execute(pi, { task: "explore", profile: "explorer" }, { ctx: { model: { baseUrl: "claude-bridge" } } });
+		const result = await execute(pi, { task: "explore", mode: "read" }, { ctx: { model: { baseUrl: "claude-bridge" } } });
 
 		assert.equal(result.details.error, true);
 		assert.ok(result.content[0].text.includes("claude-bridge"));
@@ -270,22 +270,22 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 		assert.equal(runs.length, 0);
 	});
 
-	it("rejects the base parameter outside the reviewer profile", async () => {
+	it("rejects review specialization outside read mode", async () => {
 		const { pi, jobs } = wire();
-		const result = await execute(pi, { task: "explore", profile: "explorer", base: "main" });
+		const result = await execute(pi, { task: "advise", mode: "none", review: {} });
 		assert.equal(result.details.error, true);
-		assert.ok(result.content[0].text.includes("only applies to the reviewer profile"));
+		assert.ok(result.content[0].text.includes('requires mode="read"'));
 		assert.deepEqual(jobs.list(), []);
 
-		const worker = await execute(pi, { task: "fix", profile: "worker", user_requested: true, base: "main" });
+		const worker = await execute(pi, { task: "fix", mode: "full", user_requested: true, review: {} });
 		assert.equal(worker.details.error, true);
 	});
 });
 
-describe("SpawnClaudeAgent worker profile", () => {
+describe("SpawnClaudeAgent capability modes", () => {
 	it("spawns a background worker with the full-capability prompt and a single-writer warning", async () => {
 		const { pi, jobs, captures, runs } = wire();
-		const result = await execute(pi, { task: "rename the helper", profile: "worker", user_requested: true });
+		const result = await execute(pi, { task: "rename the helper", mode: "full", user_requested: true });
 
 		assert.equal(result.details.error, undefined);
 		assert.equal(result.details.profile, "worker");
@@ -303,21 +303,33 @@ describe("SpawnClaudeAgent worker profile", () => {
 
 	it("keeps the read-only wording (and no warning) for explorer spawns", async () => {
 		const { pi } = wire();
-		const result = await execute(pi, { task: "explore", profile: "explorer" });
+		const result = await execute(pi, { task: "explore", mode: "read" });
 		const text = result.content[0].text;
 		assert.ok(text.includes("read-only"));
 		assert.ok(!text.includes("SINGLE-WRITER WARNING"));
 	});
 
-	it("excludes the worker profile from the schema and rejects worker calls when allowWorker is off", async () => {
-		const { pi, jobs, runs, foregroundRuns } = wire({ allowWorker: false });
-		const tool = pi.tools.get("SpawnClaudeAgent");
-		const profileValues = tool.parameters.properties.profile.enum
-			?? tool.parameters.properties.profile.anyOf?.map((option) => option.const);
-		assert.ok(!JSON.stringify(profileValues ?? tool.parameters.properties.profile).includes("worker"));
-		assert.ok(!tool.description.includes("worker profile edits"));
+	it("spawns a no-access advisor with no diff capture or mutation lease", async () => {
+		const { pi, captures, runs, writeLease } = wire();
+		const result = await execute(pi, { task: "compare two general approaches", mode: "none" });
+		assert.equal(result.details.mode, "none");
+		assert.equal(result.details.profile, "advisor");
+		assert.equal(captures.length, 0);
+		assert.equal(runs[0].profile.id, "advisor");
+		assert.match(runs[0].prompt, /no repository, filesystem, shell, agent, or web capabilities/i);
+		assert.match(result.content[0].text, /no-access/);
+		assert.equal(writeLease.current(), undefined);
+	});
 
-		const result = await execute(pi, { task: "fix", profile: "worker" });
+	it("excludes full mode from the schema and rejects full calls when allowFull is off", async () => {
+		const { pi, jobs, runs, foregroundRuns } = wire({ allowFull: false });
+		const tool = pi.tools.get("SpawnClaudeAgent");
+		const modeValues = tool.parameters.properties.mode.enum
+			?? tool.parameters.properties.mode.anyOf?.map((option) => option.const);
+		assert.ok(!JSON.stringify(modeValues ?? tool.parameters.properties.mode).includes("full"));
+		assert.ok(!tool.description.includes("Use full mode only"));
+
+		const result = await execute(pi, { task: "fix", mode: "full", user_requested: true });
 		assert.equal(result.details.error, true);
 		assert.ok(result.content[0].text.includes("allowFullMode"));
 		assert.deepEqual(jobs.list(), []);
@@ -325,14 +337,22 @@ describe("SpawnClaudeAgent worker profile", () => {
 		assert.equal(foregroundRuns.length, 0);
 	});
 
-	it("requires an explicit user-request assertion for worker calls", async () => {
+	it("requires an explicit user-request assertion for full-mode calls", async () => {
 		const { pi, jobs, runs, foregroundRuns } = wire();
-		const result = await execute(pi, { task: "fix", profile: "worker" });
+		const result = await execute(pi, { task: "fix", mode: "full" });
 		assert.equal(result.details.error, true);
 		assert.match(result.content[0].text, /requires user_requested=true/);
 		assert.deepEqual(jobs.list(), []);
 		assert.equal(runs.length, 0);
 		assert.equal(foregroundRuns.length, 0);
+	});
+
+	it("rejects user_requested outside full mode", async () => {
+		const { pi, jobs } = wire();
+		const result = await execute(pi, { task: "explore", mode: "read", user_requested: true });
+		assert.equal(result.details.error, true);
+		assert.match(result.content[0].text, /applies only to mode="full"/);
+		assert.deepEqual(jobs.list(), []);
 	});
 });
 
@@ -345,7 +365,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 
 	it("defaults to background: no execution argument reaches the manager path", async () => {
 		const { pi, jobs, foregroundRuns } = wire();
-		const result = await execute(pi, { task: "explore", profile: "explorer" });
+		const result = await execute(pi, { task: "explore", mode: "read" });
 		assert.equal(result.details.jobId, "claude-job-t-1");
 		assert.equal(jobs.get("claude-job-t-1").status, "running");
 		assert.equal(foregroundRuns.length, 0);
@@ -355,7 +375,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		const { pi, jobs, runs, foregroundRuns } = wire();
 		const result = await execute(
 			pi,
-			{ task: "fix the bug", profile: "worker", user_requested: true, execution: "foreground", model: "sonnet", thinking: "high" },
+			{ task: "fix the bug", mode: "full", user_requested: true, execution: "foreground", model: "sonnet", thinking: "high" },
 			{ ctx: foregroundCtx() },
 		);
 
@@ -385,7 +405,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		const { pi, foregroundRuns } = wire();
 		await execute(
 			pi,
-			{ task: "continue the plan", profile: "explorer", execution: "foreground", isolated: false },
+			{ task: "continue the plan", mode: "read", execution: "foreground", isolated: false },
 			{ ctx: foregroundCtx() },
 		);
 		assert.equal(foregroundRuns[0].isolated, false);
@@ -395,8 +415,8 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 	it("rejects execution=background with isolated=false visibly instead of silently ignoring it", async () => {
 		const { pi, jobs, runs, foregroundRuns } = wire();
 		for (const params of [
-			{ task: "explore", profile: "explorer", isolated: false },
-			{ task: "explore", profile: "explorer", execution: "background", isolated: false },
+			{ task: "explore", mode: "read", isolated: false },
+			{ task: "explore", mode: "read", execution: "background", isolated: false },
 		]) {
 			const result = await execute(pi, params);
 			assert.equal(result.details.error, true);
@@ -409,7 +429,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 
 	it("accepts an explicit isolated=true on background spawns (already the contract)", async () => {
 		const { pi, jobs } = wire();
-		const result = await execute(pi, { task: "explore", profile: "explorer", isolated: true });
+		const result = await execute(pi, { task: "explore", mode: "read", isolated: true });
 		assert.equal(result.details.error, undefined);
 		assert.equal(jobs.get(result.details.jobId).status, "running");
 	});
@@ -418,7 +438,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		const { pi, captures, foregroundRuns } = wire();
 		await execute(
 			pi,
-			{ task: "review it", profile: "reviewer", execution: "foreground", base: "main" },
+			{ task: "review it", mode: "read", review: { base: "main" }, execution: "foreground" },
 			{ ctx: foregroundCtx() },
 		);
 		assert.deepEqual(captures, [{ cwd: "/repo", base: "main", capturedAt: 42 }]);
@@ -429,7 +449,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		});
 		const result = await execute(
 			failing.pi,
-			{ task: "review", profile: "reviewer", execution: "foreground", base: "nope" },
+			{ task: "review", mode: "read", review: { base: "nope" }, execution: "foreground" },
 			{ ctx: foregroundCtx() },
 		);
 		assert.equal(result.details.error, true);
@@ -439,11 +459,11 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 
 	it("allows a foreground call while a background job is running (the limit is background-only)", async () => {
 		const { pi, jobs, foregroundRuns } = wire();
-		await execute(pi, { task: "explore", profile: "explorer" });
+		await execute(pi, { task: "explore", mode: "read" });
 		assert.ok(jobs.running());
 		const result = await execute(
 			pi,
-			{ task: "quick question", profile: "explorer", execution: "foreground" },
+			{ task: "quick question", mode: "read", execution: "foreground" },
 			{ ctx: foregroundCtx() },
 		);
 		assert.equal(result.details.origin, "spawn-foreground");
@@ -452,13 +472,13 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 
 	it("rejects another writer while a background worker owns the checkout lease", async () => {
 		const { pi, jobs, foregroundRuns, writeLease } = wire();
-		await execute(pi, { task: "first edit", profile: "worker", user_requested: true });
+		await execute(pi, { task: "first edit", mode: "full", user_requested: true });
 		assert.equal(jobs.running()?.profile, "worker");
-		assert.match(writeLease.current()?.label ?? "", /background worker/);
+		assert.match(writeLease.current()?.label ?? "", /background .*worker/);
 
 		const result = await execute(
 			pi,
-			{ task: "second edit", profile: "worker", user_requested: true, execution: "foreground" },
+			{ task: "second edit", mode: "full", user_requested: true, execution: "foreground" },
 			{ ctx: foregroundCtx() },
 		);
 		assert.equal(result.details.error, true);
@@ -470,7 +490,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		let settle;
 		const executor = new Promise((resolve) => { settle = resolve; });
 		const { pi, jobs, writeLease } = wire({ runJob: () => executor });
-		const result = await execute(pi, { task: "long edit", profile: "worker", user_requested: true });
+		const result = await execute(pi, { task: "long edit", mode: "full", user_requested: true });
 		await jobs.shutdown();
 		assert.equal(jobs.get(result.details.jobId).status, "abandoned");
 		assert.ok(writeLease.current(), "abandonment is not proof the process stopped");
@@ -481,23 +501,50 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		assert.equal(writeLease.current(), undefined);
 	});
 
+	it("fails closed on a spawned worker with no settlement handle", async () => {
+		const record = {
+			id: "claude-job-broken-1",
+			profile: "worker",
+			task: "edit",
+			requestedModel: "opus",
+			status: "running",
+			createdAt: 42,
+			launch: { cwd: "/repo", capturedAt: 42 },
+		};
+		const jobs = {
+			running: () => undefined,
+			spawn: () => record,
+			settled: () => undefined,
+			reset: async () => {},
+			shutdown: async () => {},
+		};
+		const { pi, writeLease } = wire({ jobs });
+		const result = await execute(pi, { task: "edit", mode: "full", user_requested: true });
+		assert.equal(result.details.error, true);
+		assert.match(result.content[0].text, /write ownership remains held/);
+		assert.ok(writeLease.current(), "an unconfirmed running writer must keep blocking checkout mutation");
+	});
+
 	it("releases a foreground worker lease when execution settles", async () => {
 		const { pi, writeLease } = wire();
 		await execute(
 			pi,
-			{ task: "edit", profile: "worker", user_requested: true, execution: "foreground" },
+			{ task: "edit", mode: "full", user_requested: true, execution: "foreground" },
 			{ ctx: foregroundCtx() },
 		);
 		assert.equal(writeLease.current(), undefined);
 	});
 
-	it("returns visible errors for malformed profile and execution values", async () => {
+	it("returns visible errors for malformed mode, review, and execution values", async () => {
 		const { pi, jobs } = wire();
-		const badProfile = await execute(pi, { task: "x", profile: "intruder" });
-		assert.equal(badProfile.details.error, true);
-		assert.match(badProfile.content[0].text, /Unknown SpawnClaudeAgent profile: intruder/);
+		const badMode = await execute(pi, { task: "x", mode: "intruder" });
+		assert.equal(badMode.details.error, true);
+		assert.match(badMode.content[0].text, /Unknown SpawnClaudeAgent capability mode: intruder/);
+		const badReview = await execute(pi, { task: "x", mode: "read", review: "yes" });
+		assert.equal(badReview.details.error, true);
+		assert.match(badReview.content[0].text, /review parameter must be an object/);
 
-		const badExecution = await execute(pi, { task: "x", profile: "explorer", execution: "parallel" });
+		const badExecution = await execute(pi, { task: "x", mode: "read", execution: "parallel" });
 		assert.equal(badExecution.details.error, true);
 		assert.match(badExecution.content[0].text, /Unknown SpawnClaudeAgent execution mode: parallel/);
 		assert.deepEqual(jobs.list(), []);
@@ -530,10 +577,21 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		const { pi } = wire();
 		const tool = pi.tools.get("SpawnClaudeAgent");
 		const theme = { fg: (_c, t) => t, bold: (t) => t };
-		const rendered = tool.renderCall({ task: "t", profile: "worker", user_requested: true, execution: "foreground", isolated: false }, theme);
+		const rendered = tool.renderCall({ task: "t", mode: "full", user_requested: true, execution: "foreground", isolated: false }, theme);
 		const text = JSON.stringify(rendered);
 		assert.ok(text.includes("execution=foreground"));
 		assert.ok(text.includes("user-requested"));
 		assert.ok(text.includes("shared"));
+	});
+
+	it("derives mode tags for restored Phase 3c profile-based calls", () => {
+		const { pi } = wire();
+		const tool = pi.tools.get("SpawnClaudeAgent");
+		const theme = { fg: (_c, t) => t, bold: (t) => t };
+		const rendered = tool.renderCall({ task: "old review", profile: "reviewer", execution: "foreground" }, theme);
+		const text = JSON.stringify(rendered);
+		assert.ok(text.includes("mode=read"));
+		assert.ok(text.includes("agent=reviewer"));
+		assert.ok(!text.includes("mode=undefined"));
 	});
 });

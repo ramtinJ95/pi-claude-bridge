@@ -6,7 +6,7 @@ Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/
 
 1. **Provider** — Use Opus/Sonnet/Haiku as models in pi, with all tool calls flowing through pi's TUI
 2. **AskClaude tool** — Delegate tasks or questions to Claude Code when using another provider
-3. **SpawnClaudeAgent tool** — Start an independent Claude Code agent: read-only exploration/review or a full-capability worker, in the background (job ID, live widget, result on a later turn) or in the foreground (blocks and returns the result directly, like AskClaude)
+3. **SpawnClaudeAgent tool** — Start an independent Claude Code agent with explicit `none`, `read`, or `full` capability and optional read-only review specialization, in the background (job ID, live widget, result on a later turn) or foreground (blocks and returns directly, like AskClaude)
 
 
 **FYI:** Anthropic [announced and then unannounced](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) a change to how you would be billed for tools that use the Agent SDK like this one. It currently uses your regular subscription quota just like Claude Code.
@@ -67,9 +67,9 @@ redaction; the model-facing result is separately capped at about 16k characters.
 For deep inspection beyond the inline row, `/claude-details` opens one centered
 overlay over every Claude delegation in the session — AskClaude calls,
 foreground SpawnClaudeAgent calls, and background SpawnClaudeAgent jobs — as a
-single flat chronological list with clear kind/profile/status labels.
+single flat chronological list with clear kind/mode/agent/status labels.
 Foreground SpawnClaudeAgent calls appear as foreground Claude records labelled
-`SpawnClaudeAgent <profile> (foreground)`, read from the same persisted
+`SpawnClaudeAgent <agent> (foreground)`, read from the same persisted
 tool-call/result pairs as AskClaude records (no new persistence format), and
 they update live and survive session restores the same way. `Ctrl+N` toggles the same overlay. When a
 background job is running, opening the overlay focuses it first; otherwise it
@@ -96,7 +96,7 @@ shortcut warning at startup; the session picker's focused binding still works.
 The pinned header shows only what the Claude delegation itself reported. For
 AskClaude records: runtime model, tokens/cache/cost/turns, Claude session ID,
 Claude working directory, runtime permission mode, status, capability,
-isolation, and requested thinking level. For background records: profile,
+isolation, and requested thinking level. For background records: capability mode and derived agent role,
 status, runtime/requested model, thinking, permission and managed-policy
 state, Claude session ID and launch working directory, usage, elapsed time or
 duration, job ID, and the reviewer diff source when applicable. Values the
@@ -149,32 +149,36 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
 
 - **`task`** — the body of work. Include everything the agent needs; by
   default it has no Pi conversation history.
-- **`profile`** —
-  - `explorer`: read-only repository/web exploration and research.
-  - `reviewer`: read-only code review of a repository diff captured at launch.
-  - `worker`: full Claude Code capability (Bash/Edit/Write via the Claude Code
-    preset, governed by Claude Code permission policy and managed settings).
-    Use it only when the user explicitly asks to delegate implementation to
-    Claude.
-    The worker edits the current checkout — there is no separate worktree —
-    and its role prompt forbids committing, pushing, opening PRs, branch
-    changes, and destructive cleanup unless the task explicitly authorizes
-    them. The profile is offered only while `askClaude.allowFullMode` permits
-    full capability.
-
-  Explorer and reviewer stay structurally limited to Read, Glob, Grep,
-  WebFetch, and WebSearch — no Bash, no editing, no nested agents.
+- **`mode`** — the same explicit capability vocabulary as AskClaude:
+  - `none`: no repository, filesystem, shell, agent, or web tools. The derived
+    advisor role answers only from the task and general knowledge.
+  - `read`: structurally limited to Read, Glob, Grep, WebFetch, and WebSearch —
+    no Bash, editing, or nested agents. The normal derived role is explorer.
+  - `full`: Claude Code capability through the Claude Code preset
+    (Bash/Edit/Write, governed by Claude Code permission policy and managed
+    settings). The derived worker edits the current checkout and its role
+    prompt forbids committing, pushing, opening PRs, branch changes, and
+    destructive cleanup unless the task explicitly authorizes them. Full mode
+    is offered only while `askClaude.allowFullMode` permits it.
+- **`review`** — optional code-review specialization, valid only with
+  `mode: "read"`. Pass `{}` to review staged, unstaged, and untracked changes
+  against `HEAD`, or `{ "base": "main" }` for a branch/PR review spanning the
+  merge base of that ref and `HEAD` through the launch-time working tree. The
+  extension captures and freezes the diff before launch. Review is separate
+  from capability: it derives the reviewer role but does not add tools.
 - **`execution`** — `background` (default) or `foreground`, as above.
-- **`user_requested`** — worker only; must be `true`, and may be asserted only
+- **`user_requested`** — full mode only; must be `true`, and may be asserted only
   when the user explicitly asked to delegate implementation to Claude. Missing
-  or false assertions reject the worker call visibly.
+  or false assertions reject the full-mode call visibly; supplying it in
+  `none` or `read` mode is also rejected.
 - **`isolated`** — foreground only; `true` (default) for a fresh session,
   `false` to share Pi conversation history like AskClaude.
 - **`model`** / **`thinking`** — same semantics and defaults as AskClaude.
-- **`base`** — reviewer only: a git ref for branch/PR review. The captured diff
-  spans from the merge base of `base` and `HEAD` to the launch-time working
-  tree. Omit it to capture the staged and unstaged changes from `HEAD`. Diff
-  capture and base validation run the same way in both execution modes.
+
+The UI derives familiar agent labels from the contract: `none` → advisor,
+`read` → explorer, `read` plus `review` → reviewer, and `full` → worker. These
+labels select role prompts and presentation only; `mode` remains the capability
+authority.
 
 ### Behavior and current limits
 
@@ -192,12 +196,12 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
   cannot keep editing behind a dismissed warning. A dedicated git-worktree
   lifecycle is deliberately deferred.
 - AskClaude remains a compatibility tool for now. SpawnClaudeAgent foreground
-  execution covers its blocking/live/session-sharing mechanics, but the
-  profile-based API intentionally has no no-access equivalent of AskClaude's
-  `mode: "none"`; removing AskClaude is a separate post-dogfooding decision.
+  execution now covers its `none`/`read`/`full` capability vocabulary plus its
+  blocking/live/session-sharing mechanics; removing AskClaude is a separate
+  post-dogfooding compatibility decision.
 - Agents launch from Pi's execute-context working directory (the session cwd),
   not a guessed repository.
-- The reviewer's status/diff artifact is captured by the extension at launch —
+- A review-specialized agent's status/diff artifact is captured by the extension at launch —
   the job cannot take its own (no Bash). It is bounded under named limits (40k
   chars of diff, 4k of status) with visible truncation markers and best-effort
   credential redaction, and it records which base/source it compares. Invalid
@@ -224,7 +228,7 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
 ### Live widget, /claude-jobs, and completion delivery
 
 While a job runs, a compact widget above Pi's editor shows the Claude-job
-facts: job ID, profile, requested/runtime model, requested thinking, status,
+facts: job ID, capability mode, derived agent role, requested/runtime model, requested thinking, status,
 current action, elapsed time, runtime permission mode, permission-denial
 count, and usage once Claude Code reports it, plus the `Ctrl+N` details and
 `/claude-jobs cancel` hints. It is at most three lines (worker jobs add a
@@ -286,7 +290,7 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 - `description` — override the tool description. Default when `allowFullMode: true`: *"Delegate to Claude Code for a second opinion or analysis (code review, architecture questions, debugging theories), or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. Prefer to handle straightforward tasks yourself."*
 - `defaultMode` — `"read"` (default), `"none"`, or `"full"`
 - `defaultIsolated` — start each call in a fresh conversation without Pi history or Claude session persistence (default `true`)
-- `allowFullMode` — allow `mode: "full"`; set `false` to lock it out. The same lockout removes SpawnClaudeAgent's full-capability `worker` profile.
+- `allowFullMode` — allow `mode: "full"`; set `false` to remove full capability from both AskClaude and SpawnClaudeAgent.
 - `appendSkills` — forward pi's skills block into the system prompt (default `true`)
 - `permissionMode` — Claude Code permission policy within the selected capability mode (default `"auto"`). Supported SDK values are `"auto"`, `"default"`, `"acceptEdits"`, `"dontAsk"`, `"plan"`, and `"bypassPermissions"`. Bypass is dangerous, must be explicit, and cannot override organization-managed policy.
 

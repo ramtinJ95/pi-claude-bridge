@@ -65,6 +65,16 @@ interface BranchEntryLike {
 	};
 }
 
+/** Derive the foreground label from the new mode/review contract; retain old profile calls on restored branches. */
+function spawnAgentLabel(args: Record<string, unknown> | undefined): string | undefined {
+	if (!args) return undefined;
+	if (typeof args.profile === "string") return args.profile;
+	if (args.mode === "none") return "advisor";
+	if (args.mode === "read") return args.review && typeof args.review === "object" ? "reviewer" : "explorer";
+	if (args.mode === "full") return "worker";
+	return undefined;
+}
+
 function deriveCallStatus(details: AskClaudeResultDetails | undefined, isError: boolean | undefined): AskClaudeCallStatus {
 	if (!details) return "unresolved";
 	if (details.cancelled || details.snapshot?.status === "cancelled") return "cancelled";
@@ -105,13 +115,14 @@ export function extractAskClaudeCalls(entries: readonly unknown[], toolName: str
 						status: "unresolved",
 					};
 				} else if (spawnToolName !== undefined && call.name === spawnToolName && call.arguments?.execution === "foreground") {
+					const profile = spawnAgentLabel(call.arguments);
 					record = {
 						toolCallId: call.id,
 						timestamp: entry.timestamp,
 						prompt: typeof call.arguments?.task === "string" ? call.arguments.task : undefined,
 						status: "unresolved",
 						origin: "spawn-foreground",
-						...(typeof call.arguments?.profile === "string" ? { profile: call.arguments.profile } : {}),
+						...(profile ? { profile } : {}),
 					};
 				} else {
 					continue;

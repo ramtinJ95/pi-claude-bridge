@@ -553,7 +553,8 @@ describe("SpawnClaudeAgent result contract", () => {
 			},
 		});
 		assert.ok(text.includes("claude-job-x9k2-1"));
-		assert.ok(text.includes("profile=reviewer"));
+		assert.ok(text.includes("mode=read"));
+		assert.ok(text.includes("agent=reviewer"));
 		assert.ok(text.includes("model=opus"));
 		assert.ok(text.includes("thinking=high"));
 		assert.ok(text.includes("diff artifact"));
