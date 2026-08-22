@@ -42,6 +42,12 @@ import { BackgroundJobLimitError, BackgroundJobManager, type BackgroundJobLaunch
 import { registerBackgroundJobUI } from "./background-job-ui.js";
 import { captureReviewerDiff, type ReviewerDiffArtifact } from "./reviewer-diff.js";
 import {
+	CheckoutWriteLease,
+	checkoutWriteConflictText,
+	globalCheckoutWriteLease,
+	type CheckoutWriteLeaseHandle,
+} from "./checkout-write-lease.js";
+import {
 	retainDelegationSnapshot,
 	sdkResultErrorText as resultErrorText,
 	type DelegationSnapshot,
@@ -2294,6 +2300,8 @@ interface SpawnClaudeAgentDeps {
 	allowWorker: boolean;
 	/** Effective requested permission mode, for rendering only. */
 	requestedPermissionMode?: string;
+	/** Shared atomic lease for every full-capability Claude writer. */
+	writeLease?: CheckoutWriteLease;
 	jobs: BackgroundJobManager;
 	captureDiff: (input: { cwd: string; base?: string; capturedAt: number }) => Promise<ReviewerDiffArtifact>;
 	runJob: (input: {
@@ -2347,6 +2355,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 	const cwdOf = deps.cwd ?? ((ctx: Pick<ExtensionContext, "cwd">) => ctx.cwd);
 	const now = deps.now ?? Date.now;
 	const renderPermissionMode = deps.requestedPermissionMode ?? DEFAULT_PERMISSION_MODE;
+	const writeLease = deps.writeLease ?? new CheckoutWriteLease();
 
 	pi.on("tool_result", (event) => spawnClaudeAgentResultIsError(event));
 	// Background jobs are Pi-session-scoped. Both handlers are async and Pi
@@ -2371,6 +2380,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 	const spawnClaudeAgentParams = Type.Object({
 		task: Type.String({ description: "The body of work for the agent. Include everything it needs: by default it runs in a fresh isolated Claude session with no Pi conversation history." }),
 		profile: StringEnum(profileIds, { description: profileDescription }),
+		user_requested: Type.Optional(Type.Boolean({ description: "Worker only: must be true, and may be set only when the user explicitly asked to delegate implementation to Claude. Worker calls without this assertion fail visibly." })),
 		execution: Type.Optional(StringEnum(["foreground", "background"] as const, { description: '"background" (default): returns immediately with a job ID and delivers the bounded result as a message on a later turn. "foreground": blocks this tool call until the agent finishes and returns its bounded result directly, with live progress like AskClaude.' })),
 		isolated: Type.Optional(Type.Boolean({ description: 'Foreground only. When true (default), the agent runs in a fresh Claude session without Pi conversation history. When false, it sees the Pi conversation history (shared session, like AskClaude). Background jobs are always fresh and isolated: execution="background" with isolated=false is rejected.' })),
 		model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
@@ -2386,6 +2396,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 		renderCall(args, theme) {
 			let text = theme.fg("mdLink", theme.bold("SpawnClaudeAgent "));
 			const tags = [`profile=${args.profile}`, `execution=${args.execution ?? "background"}`];
+			if (args.user_requested) tags.push("user-requested");
 			if (args.isolated !== undefined) tags.push(args.isolated ? "isolated" : "shared");
 			tags.push(`model=${args.model ?? ASK_CLAUDE_DEFAULT_MODEL}`);
 			if (args.thinking) tags.push(`thinking=${args.thinking}`);
@@ -2409,21 +2420,34 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const requestedModel = params.model ?? ASK_CLAUDE_DEFAULT_MODEL;
-			const profileId = params.profile as AgentProfileId;
-			const execution = (params.execution ?? "background") as "foreground" | "background";
+			const rawProfile: unknown = params.profile;
+			const rawExecution: unknown = params.execution ?? "background";
+			const profileId = typeof rawProfile === "string" && (AGENT_PROFILE_IDS as readonly string[]).includes(rawProfile)
+				? rawProfile as AgentProfileId
+				: undefined;
 			const spawnError = (text: string): { content: { type: "text"; text: string }[]; details: SpawnClaudeAgentResultDetails } => ({
 				content: [{ type: "text" as const, text: assembleModelResult({ answer: `Error: ${text}` }) }],
-				details: { error: true, profile: profileId, requestedModel, thinking: params.thinking },
+				details: { error: true, ...(profileId ? { profile: profileId } : {}), requestedModel, thinking: params.thinking },
 			});
 
 			if (ctx.model?.baseUrl === "claude-bridge") {
 				debug("spawnClaudeAgent: blocked circular delegation (active provider is claude-bridge)");
 				return spawnError("SpawnClaudeAgent cannot be used when the active provider is claude-bridge — you're already running through Claude Code.");
 			}
+			if (!profileId) {
+				return spawnError(`Unknown SpawnClaudeAgent profile: ${typeof rawProfile === "string" ? rawProfile : String(rawProfile)}.`);
+			}
+			if (rawExecution !== "foreground" && rawExecution !== "background") {
+				return spawnError(`Unknown SpawnClaudeAgent execution mode: ${typeof rawExecution === "string" ? rawExecution : String(rawExecution)}.`);
+			}
+			const execution = rawExecution;
 			// Schema-level gating already hides the worker profile; this keeps a
 			// restored or hand-written call from bypassing the allowFullMode lockout.
 			if (profileId === "worker" && !deps.allowWorker) {
 				return spawnError('The "worker" profile is disabled: askClaude.allowFullMode is false in this configuration.');
+			}
+			if (profileId === "worker" && params.user_requested !== true) {
+				return spawnError('The "worker" profile requires user_requested=true, and that assertion may be supplied only when the user explicitly asked to delegate implementation to Claude.');
 			}
 			const profile = AGENT_PROFILES[profileId];
 			if (params.base !== undefined && !profile.requiresDiffArtifact) {
@@ -2446,6 +2470,15 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 				if (alreadyRunning) {
 					return spawnError(new BackgroundJobLimitError(alreadyRunning.id).message);
 				}
+			}
+
+			let writeLeaseHandle: CheckoutWriteLeaseHandle | undefined;
+			if (profile.capabilityMode === "full") {
+				writeLeaseHandle = writeLease.tryAcquire({
+					id: `${spawnClaudeAgentToolName}:${execution}:${toolCallId}`,
+					label: `${spawnClaudeAgentToolName} ${execution} worker`,
+				});
+				if (!writeLeaseHandle) return spawnError(checkoutWriteConflictText(writeLease));
 			}
 
 			try {
@@ -2475,20 +2508,25 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 					// the only writer of the checkout.
 					const isolated = params.isolated ?? true;
 					debug(`spawnClaudeAgent: foreground profile=${profileId} isolated=${isolated} diff=${diff ? diff.source : "none"}`);
-					return await deps.runForeground({
-						toolCallId,
-						task: params.task,
-						prompt,
-						profile,
-						requestedModel,
-						thinking: params.thinking,
-						isolated,
-						cwd,
-						signal,
-						onUpdate,
-						systemPrompt: ctx.getSystemPrompt(),
-						context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
-					});
+					try {
+						return await deps.runForeground({
+							toolCallId,
+							task: params.task,
+							prompt,
+							profile,
+							requestedModel,
+							thinking: params.thinking,
+							isolated,
+							cwd,
+							signal,
+							onUpdate,
+							systemPrompt: ctx.getSystemPrompt(),
+							context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
+						});
+					} finally {
+						writeLeaseHandle?.release();
+						writeLeaseHandle = undefined;
+					}
 				}
 
 				// From here the job's own AbortController owns its lifecycle; the
@@ -2509,6 +2547,13 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 						onSnapshot: run.onSnapshot,
 					}),
 				});
+				if (writeLeaseHandle) {
+					const settlement = jobs.settled(record.id);
+					if (!settlement) throw new Error(`Background worker ${record.id} has no settlement handle; refusing to release checkout ownership early.`);
+					const transferredLease = writeLeaseHandle;
+					void settlement.finally(() => transferredLease.release());
+					writeLeaseHandle = undefined;
+				}
 				debug(`spawnClaudeAgent: started ${record.id} profile=${record.profile} diff=${diff ? diff.source : "none"}`);
 				return {
 					content: [{ type: "text" as const, text: spawnedJobResultText(record) }],
@@ -2523,6 +2568,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 					} satisfies SpawnClaudeAgentResultDetails,
 				};
 			} catch (err) {
+				writeLeaseHandle?.release();
 				if (!(err instanceof BackgroundJobLimitError)) {
 					debug(`spawnClaudeAgent error: profile=${profileId} execution=${execution} model=${requestedModel}`, err);
 				}
@@ -2559,6 +2605,9 @@ export default function (pi: ExtensionAPI) {
 	// unlikely to collide; the session lifecycle cleanup is wired inside
 	// registerSpawnClaudeAgent.
 	const backgroundJobs = new BackgroundJobManager({ onDebug: debug });
+	// Process-wide across extension reloads: an unconfirmed worker from the old
+	// runtime must keep blocking another full-capability writer in the new one.
+	const checkoutWriteLease = globalCheckoutWriteLease();
 
 	if (!config.startupNoticeShown) {
 		if (config.provider?.plan === undefined) pendingNotices.push('Are you using a Max plan? You need to set provider.plan to "max" to unlock 1M context in Opus.');
@@ -2778,23 +2827,37 @@ export default function (pi: ExtensionAPI) {
 
 				// Compatibility wrapper: AskClaude maps onto the same foreground
 				// execution implementation foreground SpawnClaudeAgent uses.
+				const mode = (params.mode ?? defaultMode) as "full" | "read" | "none";
 				const isolated = params.isolated ?? defaultIsolated;
-				return executeForegroundDelegation({
-					toolCallId,
-					displayPrompt: params.prompt,
-					delegationPrompt: params.prompt,
-					mode: (params.mode ?? defaultMode) as "full" | "read" | "none",
-					isolated,
-					requestedModel: params.model ?? ASK_CLAUDE_DEFAULT_MODEL,
-					thinking: params.thinking,
-					signal,
-					onUpdate,
-					systemPrompt: ctx.getSystemPrompt(),
-					appendSkills: askConf?.appendSkills,
-					permissionMode: askConf?.permissionMode,
-					context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
-					cwd: ctx.cwd,
-				});
+				const writeLeaseHandle = mode === "full"
+					? checkoutWriteLease.tryAcquire({ id: `${askClaudeToolName}:${toolCallId}`, label: `${askClaudeToolName} full call` })
+					: undefined;
+				if (mode === "full" && !writeLeaseHandle) {
+					return {
+						content: [{ type: "text" as const, text: assembleModelResult({ answer: `Error: ${checkoutWriteConflictText(checkoutWriteLease)}` }) }],
+						details: { error: true, capabilityMode: mode, requestedModel: params.model ?? ASK_CLAUDE_DEFAULT_MODEL, thinking: params.thinking, isolated },
+					};
+				}
+				try {
+					return await executeForegroundDelegation({
+						toolCallId,
+						displayPrompt: params.prompt,
+						delegationPrompt: params.prompt,
+						mode,
+						isolated,
+						requestedModel: params.model ?? ASK_CLAUDE_DEFAULT_MODEL,
+						thinking: params.thinking,
+						signal,
+						onUpdate,
+						systemPrompt: ctx.getSystemPrompt(),
+						appendSkills: askConf?.appendSkills,
+						permissionMode: askConf?.permissionMode,
+						context: isolated ? undefined : buildSessionContext(ctx.sessionManager.getBranch()).messages as Context["messages"],
+						cwd: ctx.cwd,
+					});
+				} finally {
+					writeLeaseHandle?.release();
+				}
 			},
 		});
 	}
@@ -2810,6 +2873,7 @@ export default function (pi: ExtensionAPI) {
 		// lockout as AskClaude's full mode.
 		allowWorker: askContract.allowFull,
 		requestedPermissionMode: askPermissionMode,
+		writeLease: checkoutWriteLease,
 		jobs: backgroundJobs,
 		captureDiff: captureReviewerDiff,
 		// Background jobs resolve permission policy from the same configured

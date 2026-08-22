@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { BackgroundJobManager } from "../src/background-jobs.js";
+import { CheckoutWriteLease } from "../src/checkout-write-lease.js";
 import { __test } from "../src/index.js";
 
 const { registerSpawnClaudeAgent } = __test;
@@ -65,9 +66,11 @@ function wire(overrides = {}) {
 	const captures = [];
 	const runs = [];
 	const foregroundRuns = [];
+	const writeLease = new CheckoutWriteLease();
 	const deps = {
 		enabled: true,
 		allowWorker: true,
+		writeLease,
 		jobs,
 		captureDiff: async (input) => {
 			captures.push(input);
@@ -86,7 +89,7 @@ function wire(overrides = {}) {
 		...overrides,
 	};
 	registerSpawnClaudeAgent(pi, deps);
-	return { pi, jobs, captures, runs, foregroundRuns, deps };
+	return { pi, jobs, captures, runs, foregroundRuns, writeLease, deps };
 }
 
 function execute(pi, params, { signal, ctx } = {}) {
@@ -274,7 +277,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 		assert.ok(result.content[0].text.includes("only applies to the reviewer profile"));
 		assert.deepEqual(jobs.list(), []);
 
-		const worker = await execute(pi, { task: "fix", profile: "worker", base: "main" });
+		const worker = await execute(pi, { task: "fix", profile: "worker", user_requested: true, base: "main" });
 		assert.equal(worker.details.error, true);
 	});
 });
@@ -282,7 +285,7 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 describe("SpawnClaudeAgent worker profile", () => {
 	it("spawns a background worker with the full-capability prompt and a single-writer warning", async () => {
 		const { pi, jobs, captures, runs } = wire();
-		const result = await execute(pi, { task: "rename the helper", profile: "worker" });
+		const result = await execute(pi, { task: "rename the helper", profile: "worker", user_requested: true });
 
 		assert.equal(result.details.error, undefined);
 		assert.equal(result.details.profile, "worker");
@@ -321,6 +324,16 @@ describe("SpawnClaudeAgent worker profile", () => {
 		assert.equal(runs.length, 0);
 		assert.equal(foregroundRuns.length, 0);
 	});
+
+	it("requires an explicit user-request assertion for worker calls", async () => {
+		const { pi, jobs, runs, foregroundRuns } = wire();
+		const result = await execute(pi, { task: "fix", profile: "worker" });
+		assert.equal(result.details.error, true);
+		assert.match(result.content[0].text, /requires user_requested=true/);
+		assert.deepEqual(jobs.list(), []);
+		assert.equal(runs.length, 0);
+		assert.equal(foregroundRuns.length, 0);
+	});
 });
 
 describe("SpawnClaudeAgent execution dispatch", () => {
@@ -342,7 +355,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		const { pi, jobs, runs, foregroundRuns } = wire();
 		const result = await execute(
 			pi,
-			{ task: "fix the bug", profile: "worker", execution: "foreground", model: "sonnet", thinking: "high" },
+			{ task: "fix the bug", profile: "worker", user_requested: true, execution: "foreground", model: "sonnet", thinking: "high" },
 			{ ctx: foregroundCtx() },
 		);
 
@@ -437,6 +450,59 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		assert.equal(foregroundRuns.length, 1);
 	});
 
+	it("rejects another writer while a background worker owns the checkout lease", async () => {
+		const { pi, jobs, foregroundRuns, writeLease } = wire();
+		await execute(pi, { task: "first edit", profile: "worker", user_requested: true });
+		assert.equal(jobs.running()?.profile, "worker");
+		assert.match(writeLease.current()?.label ?? "", /background worker/);
+
+		const result = await execute(
+			pi,
+			{ task: "second edit", profile: "worker", user_requested: true, execution: "foreground" },
+			{ ctx: foregroundCtx() },
+		);
+		assert.equal(result.details.error, true);
+		assert.match(result.content[0].text, /write access is already held/);
+		assert.equal(foregroundRuns.length, 0);
+	});
+
+	it("keeps the worker lease after abandonment until the executor really settles", async () => {
+		let settle;
+		const executor = new Promise((resolve) => { settle = resolve; });
+		const { pi, jobs, writeLease } = wire({ runJob: () => executor });
+		const result = await execute(pi, { task: "long edit", profile: "worker", user_requested: true });
+		await jobs.shutdown();
+		assert.equal(jobs.get(result.details.jobId).status, "abandoned");
+		assert.ok(writeLease.current(), "abandonment is not proof the process stopped");
+
+		settle(runResult());
+		await jobs.settled(result.details.jobId);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(writeLease.current(), undefined);
+	});
+
+	it("releases a foreground worker lease when execution settles", async () => {
+		const { pi, writeLease } = wire();
+		await execute(
+			pi,
+			{ task: "edit", profile: "worker", user_requested: true, execution: "foreground" },
+			{ ctx: foregroundCtx() },
+		);
+		assert.equal(writeLease.current(), undefined);
+	});
+
+	it("returns visible errors for malformed profile and execution values", async () => {
+		const { pi, jobs } = wire();
+		const badProfile = await execute(pi, { task: "x", profile: "intruder" });
+		assert.equal(badProfile.details.error, true);
+		assert.match(badProfile.content[0].text, /Unknown SpawnClaudeAgent profile: intruder/);
+
+		const badExecution = await execute(pi, { task: "x", profile: "explorer", execution: "parallel" });
+		assert.equal(badExecution.details.error, true);
+		assert.match(badExecution.content[0].text, /Unknown SpawnClaudeAgent execution mode: parallel/);
+		assert.deepEqual(jobs.list(), []);
+	});
+
 	it("renders foreground results with the AskClaude renderer and background results as plain text", () => {
 		const { pi } = wire();
 		const tool = pi.tools.get("SpawnClaudeAgent");
@@ -464,9 +530,10 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		const { pi } = wire();
 		const tool = pi.tools.get("SpawnClaudeAgent");
 		const theme = { fg: (_c, t) => t, bold: (t) => t };
-		const rendered = tool.renderCall({ task: "t", profile: "worker", execution: "foreground", isolated: false }, theme);
+		const rendered = tool.renderCall({ task: "t", profile: "worker", user_requested: true, execution: "foreground", isolated: false }, theme);
 		const text = JSON.stringify(rendered);
 		assert.ok(text.includes("execution=foreground"));
+		assert.ok(text.includes("user-requested"));
 		assert.ok(text.includes("shared"));
 	});
 });
