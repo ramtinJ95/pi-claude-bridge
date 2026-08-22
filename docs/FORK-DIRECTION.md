@@ -419,6 +419,73 @@ retained/redacted snapshots — no second viewer framework or retention path.
   the AskClaude live slot and the manager while open and releases both on
   dispose.
 
+### Phase 3c: worker agents and selectable execution — implementation complete
+
+One combined change extended the existing `SpawnClaudeAgent` tool rather than
+adding another first-class tool. Implemented (not yet runtime-dogfooded):
+
+- A `worker` profile backed by the existing `full` capability policy (Claude
+  Code preset with the same disallowed interactive/lifecycle tools as
+  AskClaude full mode). Permission policy comes from the configured
+  `askClaude.permissionMode` (default `auto`) for both execution modes and
+  never hard-codes `bypassPermissions`; the `allowFullMode: false` lockout
+  removes the worker profile from the schema and rejects it at dispatch. The
+  worker role prompt states the current-checkout single-writer ownership and
+  forbids commit/push/PR/branch changes/destructive cleanup without explicit
+  task authorization. Its tool contract also limits worker use to explicit
+  user-requested implementation delegation. Explorer/reviewer remain
+  structurally read-only.
+- `execution: "foreground" | "background"`, defaulting to `background` to
+  preserve the shipped contract. Foreground awaits the shared delegation
+  runner and returns the bounded result in the current Pi tool call; background
+  keeps the existing manager, immediate job ID, widget, cancellation, shutdown,
+  persistence, one-job limit, and next-turn delivery path.
+- Foreground execution runs through one shared `executeForegroundDelegation`
+  adapter extracted from the AskClaude registration: the same runner, throttled
+  live updates, retained snapshot, rich renderer, error promotion, live overlay
+  slot, and finalization. There is no second synchronous runner or result
+  format.
+- Background execution remains fresh and isolated; `execution: "background"`
+  with `isolated: false` is rejected visibly. Foreground supports fresh
+  isolated (default) or `isolated: false` with the exact AskClaude
+  shared-session resume behavior. Reviewer diff capture and base validation
+  run in both execution modes, and launches use Pi's execute-context cwd
+  (AskClaude delegation now also uses the session cwd instead of
+  `process.cwd()`).
+- Background workers surface an explicit single-writer warning in their
+  immediate spawn result and a live-widget warning line; foreground workers
+  are naturally single-writer because Pi is blocked. A dedicated git-worktree
+  lifecycle remains deliberately deferred.
+- `AskClaude` remains registered as a compatibility tool and now maps onto the
+  same foreground implementation, preserving its mode none/read/full contract,
+  configurable defaults/name/label/allowFull/appendSkills, rendering,
+  persisted-call extraction, and `/askclaude-details` numbering (which counts
+  actual AskClaude compatibility calls only). The unified overlay includes
+  foreground SpawnClaudeAgent calls as distinctly labelled foreground Claude
+  records read from the same persisted tool-call/result pairs — no new raw
+  persistence format. Do not remove AskClaude until foreground
+  SpawnClaudeAgent parity has been dogfooded, including shared-session
+  behavior and restored overlay records; removal/deprecation is a later
+  explicit decision, not an incidental refactor.
+
+SpawnClaudeAgent foreground now covers AskClaude's blocking execution, live
+telemetry, and shared-session mechanics, but it does not yet replace every
+product use: its profile-based contract intentionally has no no-access
+equivalent of AskClaude `mode: "none"`. That gap and the compatibility-removal
+UX must be decided explicitly after dogfooding rather than hidden behind a
+misleading profile mapping.
+
+One policy resolver, delegation runner, retention path, and foreground UI
+adapter remain. `execution` selects orchestration and delivery; `profile`
+selects capability and role. Neither dimension owns a duplicate runner.
+
+Phase 3c validation: 438 passing unit tests (including worker policy/prompt,
+schema/dispatch/invalid combinations, foreground success/failure/cancellation/
+live updates, wrapper parity, overlay extraction/labels/focus, and worker UI
+labels), clean TypeScript typecheck and `git diff --check`, and a package
+dry-run containing the changed modules. Runtime dogfooding has not happened
+yet — see the handoff below.
+
 ### Current handoff: runtime dogfooding
 
 The implementation is complete; the next gate is real Pi runtime validation.
@@ -461,7 +528,22 @@ Completed runtime evidence before the unified-overlay change:
    session resume. The Pi 0.84.2 `Ctrl+N` session-picker conflict is accepted
    as shipped.
 
-Do not begin Phase 4 by default until this dogfooding is recorded and any
+Phase 3c is implemented but not yet dogfooded. In addition to the checks
+above, exercise:
+
+6. A real foreground `worker` call (isolated and `isolated=false`), confirming
+   live tool-row updates, the overlay's `SpawnClaudeAgent worker (foreground)`
+   record while running and after restore, and that shared-session resume
+   behaves like AskClaude's.
+7. A real background `worker` job: the single-writer warning in the spawn
+   result and widget, permission behavior under the managed sandbox policy
+   (auto mode with Bash/Edit under managed settings has not been observed at
+   runtime), completion delivery, and cancellation mid-edit.
+8. Visible rejection of `execution="background"` with `isolated=false`, and
+   the worker profile disappearing under `allowFullMode: false`.
+
+Then run the runtime gate above against explorer, reviewer, and worker paths;
+do not begin Phase 4 by default until the evidence is recorded and any
 blocking runtime issue is fixed.
 
 ### Deferred Herdr investigation
