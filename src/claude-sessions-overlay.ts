@@ -1,7 +1,8 @@
 // Claude Sessions overlay: one Pi-native centered overlay for deep inspection
-// of every Claude delegation in the session — blocking AskClaude calls and
-// background SpawnClaudeAgent jobs — opened with /claude-details (canonical),
-// /askclaude-details (compatibility alias), /claude-jobs, or ctrl+n.
+// of every Claude delegation in the session — blocking AskClaude calls,
+// foreground SpawnClaudeAgent calls, and background SpawnClaudeAgent jobs —
+// opened with /claude-details (canonical), /askclaude-details (compatibility
+// alias), /claude-jobs, or ctrl+n.
 //
 // AskClaude records are read from the current session branch's persisted
 // tool-call/result pairs (askclaude-details.ts) plus a single in-memory live
@@ -331,14 +332,17 @@ export interface ClaudeSessionsUIHandle {
 
 export function registerClaudeSessionsUI(
 	pi: ExtensionAPI,
-	options: { toolName: string; jobs: OverlayJobSource },
+	options: { toolName: string; spawnToolName?: string; jobs: OverlayJobSource },
 ): ClaudeSessionsUIHandle {
-	const { toolName, jobs } = options;
+	const { toolName, spawnToolName, jobs } = options;
 	let closeActive: (() => void) | null = null;
 
 	const loadRecordsFor = (ctx: ExtensionContext) => () => {
 		const entries = ctx.sessionManager.getBranch();
-		const calls = mergeLiveCall(extractAskClaudeCalls(entries, toolName), getLiveAskClaudeCall());
+		// Foreground SpawnClaudeAgent calls are extracted as foreground Claude
+		// records alongside AskClaude compatibility calls; background spawns are
+		// covered by the job records below.
+		const calls = mergeLiveCall(extractAskClaudeCalls(entries, toolName, spawnToolName), getLiveAskClaudeCall());
 		const background = mergeBackgroundJobRecords(extractBackgroundJobRecords(entries), jobs.list());
 		return mergeClaudeSessionRecords(calls, background);
 	};

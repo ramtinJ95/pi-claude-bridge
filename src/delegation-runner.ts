@@ -69,12 +69,12 @@ export async function runDelegation(input: DelegationRunnerInput): Promise<Deleg
 	const publish = () => input.onSnapshot?.(snapshot);
 	const onAbort = () => {
 		wasAborted = true;
-		// interrupt() asks Claude Code to stop cooperatively. If that request itself
-		// fails there is nothing left to negotiate with, so close the transport and
-		// let the loop below report cancellation.
-		void sdkQuery?.interrupt().catch(() => {
-			try { sdkQuery?.close(); } catch {}
-		});
+		const activeQuery = sdkQuery;
+		// Ask Claude Code to stop cooperatively, but do not wait for that control
+		// request before closing the transport. A wedged interrupt must not leave a
+		// background worker editing after shutdown has marked it abandoned.
+		void activeQuery?.interrupt().catch(() => {});
+		try { activeQuery?.close(); } catch {}
 	};
 	const completedResult = (stopReason: "stop" | "cancelled"): DelegationRunResult => ({
 		responseText: snapshot.responseText,

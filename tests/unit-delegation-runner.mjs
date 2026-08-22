@@ -152,8 +152,35 @@ describe("delegation runner", () => {
 		});
 
 		assert.equal(hooks.interrupts, 1);
-		// One close from the failed interrupt's fallback, one from the runner's finally.
+		// One immediate hard close on abort, one from the runner's finally.
 		assert.equal(hooks.closes, 2);
+		assert.equal(result.stopReason, "cancelled");
+		assert.equal(result.snapshot.status, "cancelled");
+	});
+
+	it("hard-closes immediately when the cooperative interrupt never settles", async () => {
+		const controller = new AbortController();
+		const hooks = { interrupts: 0, closes: 0, closed: false };
+		const query = {
+			async *[Symbol.asyncIterator]() {
+				yield init;
+				while (!hooks.closed) await new Promise((resolve) => setImmediate(resolve));
+			},
+			interrupt() { hooks.interrupts++; return new Promise(() => {}); },
+			close() { hooks.closes++; hooks.closed = true; },
+		};
+
+		const result = await runDelegation({
+			prompt: "question",
+			options: {},
+			requestedPermissionMode: "auto",
+			signal: controller.signal,
+			queryFactory: () => query,
+			onSnapshot: (snapshot) => { if (snapshot.sessionId) controller.abort(); },
+		});
+
+		assert.equal(hooks.interrupts, 1);
+		assert.ok(hooks.closes >= 1, "abort must not wait for interrupt before closing");
 		assert.equal(result.stopReason, "cancelled");
 		assert.equal(result.snapshot.status, "cancelled");
 	});

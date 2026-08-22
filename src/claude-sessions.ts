@@ -198,14 +198,16 @@ export function requestedOverlayFocus(records: readonly ClaudeSessionRecord[], r
 }
 
 /**
- * `/askclaude-details [n]` compatibility: `n` counts AskClaude calls only
- * (preserving the command's original numbering) and maps to the merged record.
- * Without `n`, focus the latest AskClaude record. `index: -1` means no
- * AskClaude record exists, so the compatibility command can preserve its old
- * honest no-calls response instead of unexpectedly opening on a background job.
+ * `/askclaude-details [n]` compatibility: `n` counts actual AskClaude
+ * compatibility calls only — not foreground SpawnClaudeAgent calls or
+ * background jobs — preserving the command's original numbering, and maps to
+ * the merged record. Without `n`, focus the latest AskClaude record.
+ * `index: -1` means no AskClaude record exists, so the compatibility command
+ * can preserve its old honest no-calls response instead of unexpectedly
+ * opening on another record kind.
  */
 export function askClaudeOverlayFocus(records: readonly ClaudeSessionRecord[], requested?: number): OverlayFocus {
-	const askIndexes = records.flatMap((record, index) => (record.kind === "askclaude" ? [index] : []));
+	const askIndexes = records.flatMap((record, index) => (record.kind === "askclaude" && record.call.origin === undefined ? [index] : []));
 	if (askIndexes.length === 0) return { index: -1, pinned: false };
 	const index = askIndexes[selectCallIndex(askIndexes.length, requested)];
 	return { index, pinned: index < records.length - 1 };
@@ -332,7 +334,10 @@ export function buildSessionHeaderLines(
  * over already retained/redacted data.
  */
 export function buildSessionBodyLines(record: ClaudeSessionRecord, theme: RenderTheme, width: number): OverlayBody {
-	if (record.kind === "askclaude") return buildOverlayBodyLines(record.call, theme, width);
+	if (record.kind === "askclaude") {
+		return buildOverlayBodyLines(record.call, theme, width,
+			record.call.origin === "spawn-foreground" ? { promptTitle: "Task" } : undefined);
+	}
 	const call = backgroundCallRecord(record);
 	if (!call) return { lines: [theme.fg("dim", MALFORMED_NOTICE)], sections: [] };
 	return buildOverlayBodyLines(call, theme, width, {

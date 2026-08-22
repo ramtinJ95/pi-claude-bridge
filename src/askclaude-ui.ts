@@ -29,6 +29,10 @@ export interface AskClaudeResultDetails {
 	isolated?: boolean;
 	error?: boolean;
 	cancelled?: boolean;
+	/** Marks a foreground SpawnClaudeAgent result; absent on AskClaude compatibility calls. */
+	origin?: "spawn-foreground";
+	/** SpawnClaudeAgent profile of a foreground call, for labels only. */
+	profile?: string;
 	permission?: PermissionObservation;
 	permissionDenials?: DelegationPermissionDenial[];
 	managedPolicy?: ManagedPolicySummary;
@@ -283,6 +287,7 @@ export function renderAskClaudeResult(
 		: snapshot?.runtimePermissionMode ?? requestedPermissionMode;
 	const metadata = [
 		snapshot?.model || details?.requestedModel ? `model=${snapshot?.model ?? details?.requestedModel}` : undefined,
+		details?.profile ? `profile=${details.profile}` : undefined,
 		details?.capabilityMode ? `capability=${details.capabilityMode}` : undefined,
 		details?.thinking ? `thinking=${details.thinking}` : undefined,
 		details?.isolated == null ? undefined : `conversation=${details.isolated ? "isolated" : "shared"}`,
@@ -301,7 +306,11 @@ export function renderAskClaudeResult(
 	if (snapshot?.retry) container.addChild(new Text(theme.fg("warning", `Retry ${snapshot.retry.attempt}/${snapshot.retry.maxRetries}: ${snapshot.retry.error}`), 0, 0));
 	if (failureText) container.addChild(new Text(theme.fg("error", failureText.startsWith("Error:") ? failureText : `Error: ${failureText}`), 0, 0));
 
-	if (details?.prompt) addSection(container, theme.fg("muted", "── Prompt ──"), details.prompt);
+	if (details?.prompt) addSection(
+		container,
+		theme.fg("muted", details.origin === "spawn-foreground" ? "── Task ──" : "── Prompt ──"),
+		details.prompt,
+	);
 	if (snapshot?.thinkingText) addSection(container, theme.fg("muted", "── Emitted thinking summary ──"), snapshot.thinkingText);
 
 	if (snapshot && (snapshot.tools.length || snapshot.toolsOmitted)) {

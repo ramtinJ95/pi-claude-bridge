@@ -1,18 +1,21 @@
 import type { ReviewerDiffArtifact } from "./reviewer-diff.js";
 
-export type AgentProfileId = "explorer" | "reviewer";
+export type AgentProfileId = "explorer" | "reviewer" | "worker";
 
-export const AGENT_PROFILE_IDS = ["explorer", "reviewer"] as const;
+export const AGENT_PROFILE_IDS = ["explorer", "reviewer", "worker"] as const;
+
+/** Profiles that never mutate; enforced structurally by the read tool inventory. */
+export const READ_ONLY_AGENT_PROFILE_IDS = ["explorer", "reviewer"] as const;
 
 /**
- * Profile data for background Claude jobs. Profiles select inputs to the pure
+ * Profile data for spawned Claude agents. Profiles select inputs to the pure
  * policy/options boundary — the capability mode names an existing inventory in
  * `resolveDelegationPolicy`; no profile carries its own tool list or policy.
  */
 export interface AgentProfile {
 	id: AgentProfileId;
 	label: string;
-	capabilityMode: "read";
+	capabilityMode: "read" | "full";
 	requiresDiffArtifact: boolean;
 	rolePrompt: string;
 }
@@ -24,7 +27,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
 		capabilityMode: "read",
 		requiresDiffArtifact: false,
 		rolePrompt: [
-			"You are an independent background exploration agent.",
+			"You are an independent exploration agent.",
 			"Investigate the repository — and the web where it genuinely helps — using your read-only tools (Read, Glob, Grep, WebFetch, WebSearch).",
 			"You cannot run shell commands, edit files, or spawn agents; do not attempt to.",
 			"Report concrete findings with file paths and line references, state what you could not determine, and make the final answer self-contained.",
@@ -36,10 +39,22 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
 		capabilityMode: "read",
 		requiresDiffArtifact: true,
 		rolePrompt: [
-			"You are an independent background code-review agent.",
+			"You are an independent code-review agent.",
 			"Review the repository change captured in the diff artifact below, including tracked and untracked files. Use your read-only tools (Read, Glob, Grep, WebFetch, WebSearch) for surrounding context.",
 			"You cannot run shell commands, edit files, or spawn agents; the diff artifact was captured for you when this job launched and is the only diff you will see.",
 			"Report findings ordered by severity with file paths and line references. Review only what the artifact shows: if it marks content as truncated or omitted, say so instead of guessing.",
+		].join("\n"),
+	},
+	worker: {
+		id: "worker",
+		label: "Worker",
+		capabilityMode: "full",
+		requiresDiffArtifact: false,
+		rolePrompt: [
+			"You are an independent Claude Code worker agent with full tool capability (including Bash, Edit, and Write), governed by Claude Code permission policy.",
+			"You work directly in the current checkout — the same working tree the requesting agent uses. There is no separate worktree or sandbox copy; while you run, you are the only writer of this working tree.",
+			"Do NOT commit, push, open pull requests, create or delete branches, or perform destructive cleanup (git reset/checkout/clean, deleting or reverting files beyond the task) unless the task explicitly authorizes that exact action.",
+			"Make the requested changes, verify them where the task allows (build, tests, targeted checks), and report what you changed with file paths, what you verified, and anything left undone.",
 		].join("\n"),
 	},
 };

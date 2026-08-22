@@ -6,7 +6,7 @@ Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/
 
 1. **Provider** — Use Opus/Sonnet/Haiku as models in pi, with all tool calls flowing through pi's TUI
 2. **AskClaude tool** — Delegate tasks or questions to Claude Code when using another provider
-3. **SpawnClaudeAgent tool** — Start an independent background read-only Claude Code agent (exploration or code review) and keep working; a live widget tracks it and its bounded result is delivered back on a later turn
+3. **SpawnClaudeAgent tool** — Start an independent Claude Code agent: read-only exploration/review or a full-capability worker, in the background (job ID, live widget, result on a later turn) or in the foreground (blocks and returns the result directly, like AskClaude)
 
 
 **FYI:** Anthropic [announced and then unannounced](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) a change to how you would be billed for tools that use the Agent SDK like this one. It currently uses your regular subscription quota just like Claude Code.
@@ -65,9 +65,13 @@ redaction; the model-facing result is separately capped at about 16k characters.
 ### Claude Sessions overlay
 
 For deep inspection beyond the inline row, `/claude-details` opens one centered
-overlay over every Claude delegation in the session — AskClaude calls and
-background SpawnClaudeAgent jobs — as a single flat chronological list with
-clear kind/profile/status labels. `Ctrl+N` toggles the same overlay. When a
+overlay over every Claude delegation in the session — AskClaude calls,
+foreground SpawnClaudeAgent calls, and background SpawnClaudeAgent jobs — as a
+single flat chronological list with clear kind/profile/status labels.
+Foreground SpawnClaudeAgent calls appear as foreground Claude records labelled
+`SpawnClaudeAgent <profile> (foreground)`, read from the same persisted
+tool-call/result pairs as AskClaude records (no new persistence format), and
+they update live and survive session restores the same way. `Ctrl+N` toggles the same overlay. When a
 background job is running, opening the overlay focuses it first; otherwise it
 focuses the chronologically latest record. `/claude-details 2` opens record #2
 of the merged list. AskClaude records are read from the current session
@@ -80,9 +84,10 @@ the overlay is open.
 
 `/askclaude-details` remains as a compatibility alias: it opens the same
 unfiltered overlay focused on the latest AskClaude record, and
-`/askclaude-details 2` counts AskClaude calls only (preserving the command's
-original numbering) before mapping to the merged list. It is not a separately
-filtered view.
+`/askclaude-details 2` counts actual AskClaude compatibility calls only —
+foreground SpawnClaudeAgent calls and background jobs are skipped, preserving
+the command's original numbering — before mapping to the merged list. It is
+not a separately filtered view.
 
 Pi 0.84.2 also assigns `Ctrl+N` inside its session picker. The extension owns
 the shortcut in the main editor, so Pi may report that overlap as an extension
@@ -114,35 +119,84 @@ previous/next record, and `q`, `Esc`, or `Ctrl+N` close.
 Registered together with AskClaude (`askClaude.enabled: true`). Like AskClaude
 it is for non-claude-bridge providers only: when the active provider is
 claude-bridge the tool returns a visible error instead of delegating in a
-circle. Pi's LLM can start one independent background Claude Code agent and
-keep working: the tool returns immediately with a stable job ID (e.g.
-`claude-job-3f9c2d1a7b4e-1` — a collision-resistant random per-runtime prefix
-plus a counter, so ID collisions across extension reloads are overwhelmingly
-unlikely) instead of waiting for Claude to finish. The job runs
-through the same delegation engine as AskClaude, always in a fresh isolated
-read-only Claude session. A sticky widget tracks the running job, the Claude
-Sessions overlay (`Ctrl+N`, `/claude-details`, or `/claude-jobs`) inspects it,
-`/claude-jobs cancel` cancels it, and the job's bounded result is delivered
-back into the conversation exactly once when it reaches a terminal state (see
-below).
+circle. Pi's LLM can start one independent Claude Code agent in either
+execution mode:
+
+- **`execution: "background"`** (default) — the tool returns immediately with a
+  stable job ID (e.g. `claude-job-3f9c2d1a7b4e-1` — a collision-resistant
+  random per-runtime prefix plus a counter, so ID collisions across extension
+  reloads are overwhelmingly unlikely) instead of waiting for Claude to
+  finish. The job always runs in a fresh isolated Claude session. A sticky
+  widget tracks the running job, the Claude Sessions overlay (`Ctrl+N`,
+  `/claude-details`, or `/claude-jobs`) inspects it, `/claude-jobs cancel`
+  cancels it, and the job's bounded result is delivered back into the
+  conversation exactly once when it reaches a terminal state (see below).
+- **`execution: "foreground"`** — the tool call blocks until the agent
+  finishes and returns its bounded result directly, through the same
+  foreground implementation as AskClaude: same delegation runner, live
+  progress in the tool row, retained snapshot, rich rendering, error
+  semantics, and Claude Sessions overlay record. Foreground calls may choose
+  `isolated: false` to share the Pi conversation context (exactly like
+  AskClaude's shared mode); background jobs are always fresh and isolated, and
+  `execution: "background"` with `isolated: false` is rejected with a visible
+  error rather than silently ignored.
+
+Both modes run through the same delegation engine and policy resolver as
+AskClaude, with `permissionMode` taken from the same `askClaude` configuration
+(default `"auto"`; bypass is never hard-coded).
 
 ### Parameters
 
-- **`task`** — the body of work. Include everything the agent needs; it has no
-  Pi conversation history.
-- **`profile`** — `explorer` (read-only repository/web exploration and
-  research) or `reviewer` (read-only code review of a repository diff captured
-  at launch). Both profiles are limited to Read, Glob, Grep, WebFetch, and
-  WebSearch — no Bash, no editing, no nested agents.
+- **`task`** — the body of work. Include everything the agent needs; by
+  default it has no Pi conversation history.
+- **`profile`** —
+  - `explorer`: read-only repository/web exploration and research.
+  - `reviewer`: read-only code review of a repository diff captured at launch.
+  - `worker`: full Claude Code capability (Bash/Edit/Write via the Claude Code
+    preset, governed by Claude Code permission policy and managed settings).
+    Use it only when the user explicitly asks to delegate implementation to
+    Claude.
+    The worker edits the current checkout — there is no separate worktree —
+    and its role prompt forbids committing, pushing, opening PRs, branch
+    changes, and destructive cleanup unless the task explicitly authorizes
+    them. The profile is offered only while `askClaude.allowFullMode` permits
+    full capability.
+
+  Explorer and reviewer stay structurally limited to Read, Glob, Grep,
+  WebFetch, and WebSearch — no Bash, no editing, no nested agents.
+- **`execution`** — `background` (default) or `foreground`, as above.
+- **`user_requested`** — worker only; must be `true`, and may be asserted only
+  when the user explicitly asked to delegate implementation to Claude. Missing
+  or false assertions reject the worker call visibly.
+- **`isolated`** — foreground only; `true` (default) for a fresh session,
+  `false` to share Pi conversation history like AskClaude.
 - **`model`** / **`thinking`** — same semantics and defaults as AskClaude.
 - **`base`** — reviewer only: a git ref for branch/PR review. The captured diff
   spans from the merge base of `base` and `HEAD` to the launch-time working
-  tree. Omit it to capture the staged and unstaged changes from `HEAD`.
+  tree. Omit it to capture the staged and unstaged changes from `HEAD`. Diff
+  capture and base validation run the same way in both execution modes.
 
 ### Behavior and current limits
 
 - One background job runs per Pi session. A second spawn fails with a visible
-  error result; it is not queued.
+  error result; it is not queued. Foreground calls do not count against this
+  limit — Pi is blocked while they run.
+- **Single-writer contract for full-capability Claude calls:** one atomic,
+  process-wide checkout lease covers background workers, foreground workers,
+  and AskClaude `mode: "full"`. A second Claude writer fails visibly, including
+  across an extension reload while an old worker has not actually settled.
+  Background worker results and the live widget also warn the main agent to
+  inspect/discuss only. The lease remains held after an `abandoned` status
+  until the executor really settles; cancellation requests cooperative
+  interrupt and immediately closes the SDK transport so a wedged interrupt
+  cannot keep editing behind a dismissed warning. A dedicated git-worktree
+  lifecycle is deliberately deferred.
+- AskClaude remains a compatibility tool for now. SpawnClaudeAgent foreground
+  execution covers its blocking/live/session-sharing mechanics, but the
+  profile-based API intentionally has no no-access equivalent of AskClaude's
+  `mode: "none"`; removing AskClaude is a separate post-dogfooding decision.
+- Agents launch from Pi's execute-context working directory (the session cwd),
+  not a guessed repository.
 - The reviewer's status/diff artifact is captured by the extension at launch —
   the job cannot take its own (no Bash). It is bounded under named limits (40k
   chars of diff, 4k of status) with visible truncation markers and best-effort
@@ -173,9 +227,9 @@ While a job runs, a compact widget above Pi's editor shows the Claude-job
 facts: job ID, profile, requested/runtime model, requested thinking, status,
 current action, elapsed time, runtime permission mode, permission-denial
 count, and usage once Claude Code reports it, plus the `Ctrl+N` details and
-`/claude-jobs cancel` hints. It is at most three lines, truncated to the
-terminal width, and disappears on every terminal state, session shutdown, or
-session switch.
+`/claude-jobs cancel` hints. It is at most three lines (worker jobs add a
+fourth single-writer warning line), truncated to the terminal width, and
+disappears on every terminal state, session shutdown, or session switch.
 
 Human commands (no model context consumed):
 
@@ -232,7 +286,7 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 - `description` — override the tool description. Default when `allowFullMode: true`: *"Delegate to Claude Code for a second opinion or analysis (code review, architecture questions, debugging theories), or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. Prefer to handle straightforward tasks yourself."*
 - `defaultMode` — `"read"` (default), `"none"`, or `"full"`
 - `defaultIsolated` — start each call in a fresh conversation without Pi history or Claude session persistence (default `true`)
-- `allowFullMode` — allow `mode: "full"`; set `false` to lock it out
+- `allowFullMode` — allow `mode: "full"`; set `false` to lock it out. The same lockout removes SpawnClaudeAgent's full-capability `worker` profile.
 - `appendSkills` — forward pi's skills block into the system prompt (default `true`)
 - `permissionMode` — Claude Code permission policy within the selected capability mode (default `"auto"`). Supported SDK values are `"auto"`, `"default"`, `"acceptEdits"`, `"dontAsk"`, `"plan"`, and `"bypassPermissions"`. Bypass is dangerous, must be explicit, and cannot override organization-managed policy.
 
