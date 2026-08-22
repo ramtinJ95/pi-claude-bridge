@@ -37,7 +37,7 @@ import {
 import { assembleModelResult } from "./delegation-retention.js";
 import { buildDelegationQueryOptions } from "./delegation-options.js";
 import { runDelegation, type DelegationQueryFactory, type DelegationRunResult } from "./delegation-runner.js";
-import { AGENT_PROFILES, AGENT_PROFILE_IDS, READ_ONLY_AGENT_PROFILE_IDS, buildAgentJobPrompt, type AgentProfile, type AgentProfileId } from "./agent-profiles.js";
+import { AGENT_PROFILES, buildAgentJobPrompt, resolveAgentProfile, type AgentProfile, type AgentProfileId } from "./agent-profiles.js";
 import { BackgroundJobLimitError, BackgroundJobManager, type BackgroundJobLaunch, type BackgroundJobRecord } from "./background-jobs.js";
 import { registerBackgroundJobUI } from "./background-job-ui.js";
 import { captureReviewerDiff, type ReviewerDiffArtifact } from "./reviewer-diff.js";
@@ -59,6 +59,7 @@ import {
 	resolveDelegationPolicy,
 	resolveProviderPermissionPolicy,
 	summarizeManagedPolicy,
+	type CapabilityMode,
 	type ManagedPolicySummary,
 } from "./query-policy.js";
 
@@ -2186,6 +2187,8 @@ let spawnClaudeAgentToolName = "SpawnClaudeAgent";
 /** Bounded launch facts for the persisted spawn result — never the diff text itself. */
 interface SpawnClaudeAgentResultDetails {
 	jobId?: string;
+	mode?: CapabilityMode;
+	/** Derived role/presentation label; capability is selected by `mode`. */
 	profile?: AgentProfileId;
 	requestedModel?: string;
 	thinking?: string;
@@ -2211,10 +2214,10 @@ function spawnClaudeAgentResultIsError(
 
 /**
  * Run one background job through the shared delegation runner. Always a fresh
- * isolated Claude session; the profile selects the capability inventory (read
- * for explorer/reviewer, full for worker) through the same pure policy/options
- * boundary AskClaude uses, and the permission policy comes from the same
- * configured AskClaude delegation settings — never a hard-coded bypass.
+ * isolated Claude session; `mode` selects the same none/read/full capability
+ * inventory AskClaude uses. The derived profile contributes only a role prompt
+ * and presentation label; permission policy comes from the same configured
+ * AskClaude delegation settings — never a hard-coded bypass.
  */
 function runBackgroundJobDelegation(input: {
 	prompt: string;
@@ -2256,10 +2259,12 @@ function runBackgroundJobDelegation(input: {
 }
 
 function spawnedJobResultText(record: BackgroundJobRecord): string {
-	const worker = record.profile === "worker";
+	const mode = AGENT_PROFILES[record.profile].capabilityMode;
+	const worker = mode === "full";
+	const capability = mode === "none" ? "no-access" : mode === "read" ? "read-only" : "full-capability";
 	const parts = [
-		`Started background Claude job ${record.id} (profile=${record.profile}, model=${record.requestedModel}${record.thinking ? `, thinking=${record.thinking}` : ""}).`,
-		`It runs in a fresh isolated ${worker ? "full-capability" : "read-only"} Claude session in ${record.launch.cwd} on context captured at launch${record.launch.diff ? ` (diff artifact: ${record.launch.diff.source})` : ""}.`,
+		`Started background Claude job ${record.id} (mode=${mode}, agent=${record.profile}, model=${record.requestedModel}${record.thinking ? `, thinking=${record.thinking}` : ""}).`,
+		`It runs in a fresh isolated ${capability} Claude session in ${record.launch.cwd} on context captured at launch${record.launch.diff ? ` (review diff artifact: ${record.launch.diff.source})` : ""}.`,
 		"One background job runs per session; a second spawn fails until this one finishes.",
 	];
 	if (worker) {
@@ -2293,11 +2298,11 @@ interface SpawnClaudeAgentDeps {
 	/** SpawnClaudeAgent shares AskClaude's opt-in; nothing registers when it is off. */
 	enabled: boolean;
 	/**
-	 * Whether the full-capability worker profile is offered. Wired from the
+	 * Whether full capability is offered. Wired from the
 	 * AskClaude contract's allowFullMode lockout so a configuration that forbids
-	 * full mode cannot be bypassed by spawning a worker instead.
+	 * full mode cannot be bypassed through SpawnClaudeAgent.
 	 */
-	allowWorker: boolean;
+	allowFull: boolean;
 	/** Effective requested permission mode, for rendering only. */
 	requestedPermissionMode?: string;
 	/** Shared atomic lease for every full-capability Claude writer. */
@@ -2372,35 +2377,38 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 		await jobs.shutdown();
 	});
 
-	const profileIds = deps.allowWorker ? AGENT_PROFILE_IDS : READ_ONLY_AGENT_PROFILE_IDS;
-	const profileDescription = '"explorer": read-only repository/web exploration and research. "reviewer": read-only code review of a repository diff captured at launch. Both are limited to Read, Glob, Grep, WebFetch, and WebSearch.'
-		+ (deps.allowWorker
-			? ' "worker": full Claude Code capability (Bash/Edit/Write under Claude Code permission policy) that edits the current checkout; use it only when the user explicitly asks to delegate implementation, and it never commits, pushes, opens PRs, or runs destructive cleanup unless the task explicitly authorizes it.'
+	const modeValues = deps.allowFull ? ["none", "read", "full"] as const : ["none", "read"] as const;
+	const modeDescription = '"none": general knowledge only with no repository, shell, agent, or web access. "read": structurally read-only repository/web exploration.'
+		+ (deps.allowFull
+			? ' "full": Bash/Edit/Write under Claude Code permission policy; use only when the user explicitly requests implementation delegation.'
 			: "");
 	const spawnClaudeAgentParams = Type.Object({
 		task: Type.String({ description: "The body of work for the agent. Include everything it needs: by default it runs in a fresh isolated Claude session with no Pi conversation history." }),
-		profile: StringEnum(profileIds, { description: profileDescription }),
-		user_requested: Type.Optional(Type.Boolean({ description: "Worker only: must be true, and may be set only when the user explicitly asked to delegate implementation to Claude. Worker calls without this assertion fail visibly." })),
+		mode: StringEnum(modeValues, { description: modeDescription }),
+		review: Type.Optional(Type.Object({
+			base: Type.Optional(Type.String({ description: "Optional git ref for branch/PR review. The captured diff spans its merge base with HEAD through the launch-time working tree." })),
+		}, { description: 'Optional code-review specialization. Valid only with mode="read". Omit base to review staged, unstaged, and untracked changes against HEAD.' })),
+		user_requested: Type.Optional(Type.Boolean({ description: 'Full mode only: must be true, and may be set only when the user explicitly asked to delegate implementation to Claude. Calls with mode="full" reject without this assertion.' })),
 		execution: Type.Optional(StringEnum(["foreground", "background"] as const, { description: '"background" (default): returns immediately with a job ID and delivers the bounded result as a message on a later turn. "foreground": blocks this tool call until the agent finishes and returns its bounded result directly, with live progress like AskClaude.' })),
 		isolated: Type.Optional(Type.Boolean({ description: 'Foreground only. When true (default), the agent runs in a fresh Claude session without Pi conversation history. When false, it sees the Pi conversation history (shared session, like AskClaude). Background jobs are always fresh and isolated: execution="background" with isolated=false is rejected.' })),
 		model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
 		thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
-		base: Type.Optional(Type.String({ description: "Reviewer only: git ref to review against (branch/PR review). The captured diff spans the merge base of this ref and HEAD to the launch-time working tree. Omit to capture staged + unstaged changes from HEAD." })),
 	});
 	pi.registerTool<typeof spawnClaudeAgentParams>({
 		name: spawnClaudeAgentToolName,
 		label: "Spawn Claude Agent",
-		description: "Start an independent Claude Code agent. By default (execution=\"background\") it returns immediately with a job ID; the job runs in a fresh isolated Claude session on context captured at launch, only one background job runs per Pi session, jobs do not survive the session, and the bounded result is delivered into this conversation as a message on a later turn — there are no status/result/cancel tools, so do not wait for or poll it. With execution=\"foreground\" the call blocks until the agent finishes and returns its bounded result directly."
-			+ (deps.allowWorker ? " Use the worker profile only when the user explicitly asks to delegate implementation to Claude. It edits the current checkout; while a background worker runs you must not edit files yourself." : ""),
+		description: "Start an independent Claude Code agent. Capability is explicit: none, read, or full; review is an optional read-only specialization with a frozen launch diff. By default (execution=\"background\") it returns immediately with a job ID; the job runs in a fresh isolated Claude session on context captured at launch, only one background job runs per Pi session, jobs do not survive the session, and the bounded result is delivered into this conversation as a message on a later turn — there are no status/result/cancel tools, so do not wait for or poll it. With execution=\"foreground\" the call blocks until the agent finishes and returns its bounded result directly."
+			+ (deps.allowFull ? " Use full mode only when the user explicitly asks to delegate implementation to Claude. It edits the current checkout; while a background full-mode worker runs you must not edit files yourself." : ""),
 		parameters: spawnClaudeAgentParams,
 		renderCall(args, theme) {
 			let text = theme.fg("mdLink", theme.bold("SpawnClaudeAgent "));
-			const tags = [`profile=${args.profile}`, `execution=${args.execution ?? "background"}`];
+			const tags = [`mode=${args.mode}`, `execution=${args.execution ?? "background"}`];
+			if (args.review) tags.push("review");
 			if (args.user_requested) tags.push("user-requested");
 			if (args.isolated !== undefined) tags.push(args.isolated ? "isolated" : "shared");
 			tags.push(`model=${args.model ?? ASK_CLAUDE_DEFAULT_MODEL}`);
 			if (args.thinking) tags.push(`thinking=${args.thinking}`);
-			if (args.base) tags.push(`base=${args.base}`);
+			if (args.review?.base) tags.push(`base=${args.review.base}`);
 			text += `${theme.fg("accent", `[${tags.join(", ")}]`)} `;
 			const truncated = args.task.length > PREVIEW_MAX_CHARS ? args.task.substring(0, PREVIEW_MAX_CHARS) : args.task;
 			const lines = truncated.split("\n").slice(0, PREVIEW_MAX_LINES);
@@ -2420,39 +2428,58 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const requestedModel = params.model ?? ASK_CLAUDE_DEFAULT_MODEL;
-			const rawProfile: unknown = params.profile;
+			const rawMode: unknown = params.mode;
+			const rawReview: unknown = params.review;
 			const rawExecution: unknown = params.execution ?? "background";
-			const profileId = typeof rawProfile === "string" && (AGENT_PROFILE_IDS as readonly string[]).includes(rawProfile)
-				? rawProfile as AgentProfileId
+			const mode = rawMode === "none" || rawMode === "read" || rawMode === "full"
+				? rawMode as CapabilityMode
 				: undefined;
+			const review = rawReview === undefined
+				? undefined
+				: typeof rawReview === "object" && rawReview !== null && !Array.isArray(rawReview)
+					? rawReview as { base?: unknown }
+					: null;
+			let profile: AgentProfile | undefined;
+			if (mode && review !== null && (!review || mode === "read")) {
+				profile = resolveAgentProfile(mode, review !== undefined);
+			}
 			const spawnError = (text: string): { content: { type: "text"; text: string }[]; details: SpawnClaudeAgentResultDetails } => ({
 				content: [{ type: "text" as const, text: assembleModelResult({ answer: `Error: ${text}` }) }],
-				details: { error: true, ...(profileId ? { profile: profileId } : {}), requestedModel, thinking: params.thinking },
+				details: { error: true, ...(mode ? { mode } : {}), ...(profile ? { profile: profile.id } : {}), requestedModel, thinking: params.thinking },
 			});
 
 			if (ctx.model?.baseUrl === "claude-bridge") {
 				debug("spawnClaudeAgent: blocked circular delegation (active provider is claude-bridge)");
 				return spawnError("SpawnClaudeAgent cannot be used when the active provider is claude-bridge — you're already running through Claude Code.");
 			}
-			if (!profileId) {
-				return spawnError(`Unknown SpawnClaudeAgent profile: ${typeof rawProfile === "string" ? rawProfile : String(rawProfile)}.`);
+			if (!mode) {
+				return spawnError(`Unknown SpawnClaudeAgent capability mode: ${typeof rawMode === "string" ? rawMode : String(rawMode)}.`);
 			}
 			if (rawExecution !== "foreground" && rawExecution !== "background") {
 				return spawnError(`Unknown SpawnClaudeAgent execution mode: ${typeof rawExecution === "string" ? rawExecution : String(rawExecution)}.`);
 			}
 			const execution = rawExecution;
-			// Schema-level gating already hides the worker profile; this keeps a
+			if (review === null) {
+				return spawnError("The review parameter must be an object when provided.");
+			}
+			if (review?.base !== undefined && typeof review.base !== "string") {
+				return spawnError("The review.base parameter must be a string when provided.");
+			}
+			if (review && mode !== "read") {
+				return spawnError('Review specialization requires mode="read".');
+			}
+			// Schema-level gating already hides full mode; this keeps a
 			// restored or hand-written call from bypassing the allowFullMode lockout.
-			if (profileId === "worker" && !deps.allowWorker) {
-				return spawnError('The "worker" profile is disabled: askClaude.allowFullMode is false in this configuration.');
+			if (mode === "full" && !deps.allowFull) {
+				return spawnError('SpawnClaudeAgent mode="full" is disabled: askClaude.allowFullMode is false in this configuration.');
 			}
-			if (profileId === "worker" && params.user_requested !== true) {
-				return spawnError('The "worker" profile requires user_requested=true, and that assertion may be supplied only when the user explicitly asked to delegate implementation to Claude.');
+			if (mode === "full" && params.user_requested !== true) {
+				return spawnError('SpawnClaudeAgent mode="full" requires user_requested=true, and that assertion may be supplied only when the user explicitly asked to delegate implementation to Claude.');
 			}
-			const profile = AGENT_PROFILES[profileId];
-			if (params.base !== undefined && !profile.requiresDiffArtifact) {
-				return spawnError('The "base" parameter only applies to the reviewer profile.');
+			if (mode !== "full" && params.user_requested !== undefined) {
+				return spawnError('The user_requested assertion applies only to mode="full".');
 			}
+			if (!profile) return spawnError("Could not resolve the requested Claude agent role.");
 			// Background jobs are always fresh and isolated; silently ignoring
 			// isolated=false would change semantics the caller asked for.
 			if (execution === "background" && params.isolated === false) {
@@ -2476,7 +2503,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 			if (profile.capabilityMode === "full") {
 				writeLeaseHandle = writeLease.tryAcquire({
 					id: `${spawnClaudeAgentToolName}:${execution}:${toolCallId}`,
-					label: `${spawnClaudeAgentToolName} ${execution} worker`,
+					label: `${spawnClaudeAgentToolName} ${execution} full-mode worker`,
 				});
 				if (!writeLeaseHandle) return spawnError(checkoutWriteConflictText(writeLease));
 			}
@@ -2490,7 +2517,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 				// visibly here, not hand the reviewer an empty diff it would read as
 				// "no changes".
 				const diff = profile.requiresDiffArtifact
-					? await deps.captureDiff({ cwd, base: params.base, capturedAt })
+					? await deps.captureDiff({ cwd, base: typeof review?.base === "string" ? review.base : undefined, capturedAt })
 					: undefined;
 				// The capture awaited; the tool call may have been cancelled meanwhile.
 				if (signal.aborted) {
@@ -2507,7 +2534,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 					// Pi is blocked while it runs, so a foreground worker is naturally
 					// the only writer of the checkout.
 					const isolated = params.isolated ?? true;
-					debug(`spawnClaudeAgent: foreground profile=${profileId} isolated=${isolated} diff=${diff ? diff.source : "none"}`);
+					debug(`spawnClaudeAgent: foreground mode=${mode} agent=${profile.id} isolated=${isolated} diff=${diff ? diff.source : "none"}`);
 					try {
 						return await deps.runForeground({
 							toolCallId,
@@ -2559,6 +2586,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 					content: [{ type: "text" as const, text: spawnedJobResultText(record) }],
 					details: {
 						jobId: record.id,
+						mode,
 						profile: record.profile,
 						requestedModel: record.requestedModel,
 						thinking: record.thinking,
@@ -2570,7 +2598,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 			} catch (err) {
 				writeLeaseHandle?.release();
 				if (!(err instanceof BackgroundJobLimitError)) {
-					debug(`spawnClaudeAgent error: profile=${profileId} execution=${execution} model=${requestedModel}`, err);
+					debug(`spawnClaudeAgent error: mode=${mode} agent=${profile.id} execution=${execution} model=${requestedModel}`, err);
 				}
 				return spawnError(errorMessage(err));
 			}
@@ -2869,9 +2897,8 @@ export default function (pi: ExtensionAPI) {
 	// background jobs' session lifecycle cleanup (async, awaited by Pi 0.84.2).
 	registerSpawnClaudeAgent(pi, {
 		enabled: Boolean(askConf?.enabled),
-		// The worker profile is full capability; it honors the same allowFullMode
-		// lockout as AskClaude's full mode.
-		allowWorker: askContract.allowFull,
+		// Spawn modes share AskClaude's full-capability lockout.
+		allowFull: askContract.allowFull,
 		requestedPermissionMode: askPermissionMode,
 		writeLease: checkoutWriteLease,
 		jobs: backgroundJobs,

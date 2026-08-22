@@ -1,26 +1,38 @@
 import type { ReviewerDiffArtifact } from "./reviewer-diff.js";
+import type { CapabilityMode } from "./query-policy.js";
 
-export type AgentProfileId = "explorer" | "reviewer" | "worker";
+/** Derived presentation/role label; callers select capability with `mode`. */
+export type AgentProfileId = "advisor" | "explorer" | "reviewer" | "worker";
 
-export const AGENT_PROFILE_IDS = ["explorer", "reviewer", "worker"] as const;
-
-/** Profiles that never mutate; enforced structurally by the read tool inventory. */
-export const READ_ONLY_AGENT_PROFILE_IDS = ["explorer", "reviewer"] as const;
+export const AGENT_PROFILE_IDS = ["advisor", "explorer", "reviewer", "worker"] as const;
 
 /**
- * Profile data for spawned Claude agents. Profiles select inputs to the pure
- * policy/options boundary — the capability mode names an existing inventory in
- * `resolveDelegationPolicy`; no profile carries its own tool list or policy.
+ * Internal role data for spawned Claude agents. The public contract selects an
+ * AskClaude-compatible capability mode; `resolveAgentProfile` derives the role
+ * prompt and presentation label. No profile carries its own tool list or
+ * permission policy.
  */
 export interface AgentProfile {
 	id: AgentProfileId;
 	label: string;
-	capabilityMode: "read" | "full";
+	capabilityMode: CapabilityMode;
 	requiresDiffArtifact: boolean;
 	rolePrompt: string;
 }
 
 export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
+	advisor: {
+		id: "advisor",
+		label: "Advisor",
+		capabilityMode: "none",
+		requiresDiffArtifact: false,
+		rolePrompt: [
+			"You are an independent advisory agent with no repository, filesystem, shell, agent, or web capabilities.",
+			"Answer using the task and your general knowledge only. Do not claim to have inspected files, commands, URLs, or live project state.",
+			"If the task requires unavailable context, state exactly what information is needed rather than guessing.",
+			"Make the final answer self-contained and distinguish facts from recommendations.",
+		].join("\n"),
+	},
 	explorer: {
 		id: "explorer",
 		label: "Explorer",
@@ -58,6 +70,25 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
 		].join("\n"),
 	},
 };
+
+/**
+ * Map the public capability contract onto one internal role. Review is a
+ * read-only specialization, not a fourth capability mode.
+ */
+export function resolveAgentProfile(mode: CapabilityMode, review: boolean): AgentProfile {
+	if (review) {
+		if (mode !== "read") throw new Error('Review specialization requires mode="read".');
+		return AGENT_PROFILES.reviewer;
+	}
+	if (mode === "none") return AGENT_PROFILES.advisor;
+	if (mode === "read") return AGENT_PROFILES.explorer;
+	return AGENT_PROFILES.worker;
+}
+
+/** Safe lookup for restored/test/runtime records that may carry an unknown future label. */
+export function agentCapabilityMode(profile: string): CapabilityMode | undefined {
+	return AGENT_PROFILES[profile as AgentProfileId]?.capabilityMode;
+}
 
 export interface AgentJobLaunchContext {
 	cwd: string;

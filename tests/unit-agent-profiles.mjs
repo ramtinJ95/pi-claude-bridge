@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { AGENT_PROFILES, AGENT_PROFILE_IDS, READ_ONLY_AGENT_PROFILE_IDS, buildAgentJobPrompt } from "../src/agent-profiles.js";
+import { AGENT_PROFILES, AGENT_PROFILE_IDS, buildAgentJobPrompt, resolveAgentProfile } from "../src/agent-profiles.js";
 import { ASKCLAUDE_FULL_DISALLOWED_TOOLS, resolveDelegationPolicy } from "../src/query-policy.js";
 
 const READ_INVENTORY = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"];
@@ -21,15 +21,20 @@ function reviewerDiff(overrides = {}) {
 }
 
 describe("agent profiles", () => {
-	it("exposes exactly the explorer, reviewer, and worker profiles", () => {
-		assert.deepEqual([...AGENT_PROFILE_IDS], ["explorer", "reviewer", "worker"]);
-		assert.deepEqual([...READ_ONLY_AGENT_PROFILE_IDS], ["explorer", "reviewer"]);
-		assert.deepEqual(Object.keys(AGENT_PROFILES).sort(), ["explorer", "reviewer", "worker"]);
+	it("derives advisor, explorer, reviewer, and worker roles from capability plus review", () => {
+		assert.deepEqual([...AGENT_PROFILE_IDS], ["advisor", "explorer", "reviewer", "worker"]);
+		assert.deepEqual(Object.keys(AGENT_PROFILES).sort(), ["advisor", "explorer", "reviewer", "worker"]);
 		for (const id of AGENT_PROFILE_IDS) assert.equal(AGENT_PROFILES[id].id, id);
+		assert.equal(resolveAgentProfile("none", false).id, "advisor");
+		assert.equal(resolveAgentProfile("read", false).id, "explorer");
+		assert.equal(resolveAgentProfile("read", true).id, "reviewer");
+		assert.equal(resolveAgentProfile("full", false).id, "worker");
+		assert.throws(() => resolveAgentProfile("none", true), /requires mode="read"/);
+		assert.throws(() => resolveAgentProfile("full", true), /requires mode="read"/);
 	});
 
-	it("resolves the read-only profiles to the explicit read inventory with no mutation or nested-agent tools", () => {
-		for (const id of READ_ONLY_AGENT_PROFILE_IDS) {
+	it("resolves read-only roles to the explicit read inventory with no mutation or nested-agent tools", () => {
+		for (const id of ["explorer", "reviewer"]) {
 			const profile = AGENT_PROFILES[id];
 			assert.equal(profile.capabilityMode, "read");
 			const policy = resolveDelegationPolicy(profile.capabilityMode);
@@ -38,6 +43,14 @@ describe("agent profiles", () => {
 				assert.ok(!policy.tools.includes(tool), `${id} inventory must not include ${tool}`);
 			}
 		}
+	});
+
+	it("resolves the advisor to an empty capability inventory and an honest no-access prompt", () => {
+		const profile = AGENT_PROFILES.advisor;
+		assert.equal(profile.capabilityMode, "none");
+		assert.deepEqual(resolveDelegationPolicy(profile.capabilityMode).tools, []);
+		assert.match(profile.rolePrompt, /no repository, filesystem, shell, agent, or web capabilities/i);
+		assert.match(profile.rolePrompt, /Do not claim to have inspected/i);
 	});
 
 	it("resolves the worker profile to the existing full Claude Code capability policy without hard-coded bypass", () => {

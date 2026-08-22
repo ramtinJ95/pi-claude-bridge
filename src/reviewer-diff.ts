@@ -9,7 +9,7 @@ export const REVIEWER_STATUS_MAX_CHARS = 4_000;
 /**
  * Immutable repository change snapshot captured by the extension at job launch.
  *
- * The reviewer profile has no Bash capability, so this artifact is the only
+ * Read-mode review specialization has no Bash capability, so this artifact is the only
  * diff it ever sees. It is frozen at `capturedAt`: the reviewer's Read/Glob/Grep
  * calls still hit the live working tree, which may have moved on since.
  */
