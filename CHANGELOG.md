@@ -4,7 +4,7 @@ The scoped `@ramtinj95/pi-claude-delegation` package starts at 0.1.0. Entries
 for `pi-claude-bridge` 0.7.0 and earlier are retained below as inherited
 upstream history under the MIT license.
 
-## UNRELEASED
+## 0.1.1 — 2026-08-22
 
 - **Refactor: concise Claude delegation tool schemas** — Shorten the model-facing tool and parameter descriptions for `DelegateToClaude` and `SpawnClaudeAgent` while retaining capability defaults, isolation behavior, background delivery, and full-mode safety constraints.
 
