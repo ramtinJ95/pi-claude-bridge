@@ -32,7 +32,7 @@ import {
 import { managedPolicyLabels, type ManagedPolicySummary, type PermissionObservation } from "./query-policy.js";
 import { assembleModelResult } from "./delegation-retention.js";
 
-export const BACKGROUND_JOB_WIDGET_KEY = "claude-bridge-background-job";
+export const BACKGROUND_JOB_WIDGET_KEY = "claude-delegation-background-job";
 /** Session-persisted TUI-only entry type for completed-job details. */
 export const BACKGROUND_JOB_ENTRY_TYPE = "claude-background-job";
 /** Model-visible custom message type for completion delivery. */
@@ -440,7 +440,7 @@ export function buildJobStatusLines(records: BackgroundJobRecord[], nowMs: numbe
 
 /** Injected seams for `registerBackgroundJobUI`; unit tests replace them all. */
 export interface BackgroundJobUIDeps {
-	/** Shares the AskClaude/SpawnClaudeAgent opt-in for live behavior. */
+	/** Shares the DelegateToClaude/SpawnClaudeAgent opt-in for live behavior. */
 	enabled: boolean;
 	jobs: Pick<BackgroundJobManager, "subscribe" | "running" | "list" | "get" | "cancel">;
 	now?: () => number;
@@ -466,7 +466,7 @@ type BackgroundJobUIPi = Pick<
  */
 export function registerBackgroundJobUI(pi: BackgroundJobUIPi, deps: BackgroundJobUIDeps): void {
 	// Restored entries must remain renderable after the user disables new
-	// AskClaude/SpawnClaudeAgent work. Only live behavior is feature-gated.
+	// DelegateToClaude/SpawnClaudeAgent work. Only live behavior is feature-gated.
 	pi.registerEntryRenderer<BackgroundJobCompletionData>(BACKGROUND_JOB_ENTRY_TYPE, (entry, options, theme) =>
 		renderBackgroundJobCompletion(entry.data, options.expanded, theme));
 	if (!deps.enabled) return;

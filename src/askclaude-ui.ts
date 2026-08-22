@@ -1,6 +1,6 @@
-// Rendering helpers for the AskClaude tool.
+// Rendering helpers for the DelegateToClaude tool.
 //
-// While Claude Code runs inside an AskClaude call, Pi has one stateful tool row
+// While Claude Code runs inside an DelegateToClaude call, Pi has one stateful tool row
 // for the whole delegation. Compact rendering summarizes it; expanded rendering
 // adds the retained response, thinking summaries, a grouped action/status
 // summary, usage, session and permission state. Per-tool inputs/outputs,
@@ -29,7 +29,7 @@ export interface AskClaudeResultDetails {
 	isolated?: boolean;
 	error?: boolean;
 	cancelled?: boolean;
-	/** Marks a foreground SpawnClaudeAgent result; absent on AskClaude compatibility calls. */
+	/** Marks a foreground SpawnClaudeAgent result; absent on DelegateToClaude compatibility calls. */
 	origin?: "spawn-foreground";
 	/** SpawnClaudeAgent profile of a foreground call, for labels only. */
 	profile?: string;
@@ -114,7 +114,7 @@ export function formatToolAction(tc: ToolCallState): string | undefined {
 		const label = current ? String(current.content ?? "").slice(0, 40) : "";
 		return label || undefined;
 	} else if (verb === "askclaude") {
-		// Recursive — don't show AskClaude in its own action summary
+		// Recursive — don't show DelegateToClaude in its own action summary
 		return undefined;
 	}
 	return tc.name;

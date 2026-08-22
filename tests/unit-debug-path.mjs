@@ -16,7 +16,7 @@ describe("test harness", () => {
 		// $HOME" check would misfire for anyone whose TMPDIR lives inside their home.
 		assert.notEqual(
 			path,
-			join(homedir(), ".pi", "agent", "claude-bridge.log"),
+			join(homedir(), ".pi", "agent", "claude-delegation.log"),
 			"debug log must not resolve to the real one",
 		);
 	});

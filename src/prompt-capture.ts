@@ -96,7 +96,7 @@ export class PromptCaptures {
 	}
 
 	/**
-	 * The capture to project for one query, for both the provider and AskClaude.
+	 * The capture to project for one query, for both the provider and DelegateToClaude.
 	 *
 	 * An exact key is the normal case. A prompt that only *embeds* known prompts —
 	 * anything that wrapped what Pi assembled after we recorded it — resolves to a
@@ -135,7 +135,7 @@ export class PromptCaptures {
 			throw new Error(
 				`prompt-capture: no capture for this ${systemPrompt.length}-char system prompt, and it embeds none of the ${this.captures.size} known. `
 				+ `Claude Code would receive none of this turn's context files, skills or custom instructions. `
-				+ `The usual cause is an extension loaded after claude-bridge that rewrites the system prompt from before_agent_start — `
+				+ `The usual cause is an extension loaded after claude-delegation that rewrites the system prompt from before_agent_start — `
 				+ `one that wraps it is fine, one that rebuilds or strips it leaves nothing to match.`,
 			);
 		}

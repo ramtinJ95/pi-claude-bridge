@@ -6,7 +6,7 @@
  * before any test imports the module. Doing that per test file is easy to forget,
  * and forgetting is invisible: the suite still passes everywhere except on a
  * developer machine with CLAUDE_BRIDGE_DEBUG=1, where the tests instead append
- * fixture data to the real ~/.pi/agent/claude-bridge.log.
+ * fixture data to the real ~/.pi/agent/claude-delegation.log.
  *
  * Wiring this as `node --import ./tests/lib/setup.mjs` guarantees it runs first
  * in every test child process. tests/unit-debug-path.mjs asserts it took effect.
@@ -15,6 +15,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const logDir = mkdtempSync(join(tmpdir(), "claude-bridge-test-log-"));
-process.env.CLAUDE_BRIDGE_DEBUG_PATH = join(logDir, "claude-bridge.log");
+const logDir = mkdtempSync(join(tmpdir(), "claude-delegation-test-log-"));
+process.env.CLAUDE_BRIDGE_DEBUG_PATH = join(logDir, "claude-delegation.log");
 process.on("exit", () => rmSync(logDir, { recursive: true, force: true }));

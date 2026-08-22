@@ -58,7 +58,7 @@ describe("agent profiles", () => {
 		assert.equal(profile.capabilityMode, "full");
 		assert.equal(profile.requiresDiffArtifact, false);
 		const policy = resolveDelegationPolicy(profile.capabilityMode);
-		// The same preset + disallowed list AskClaude full mode uses — no
+		// The same preset + disallowed list DelegateToClaude full mode uses — no
 		// worker-specific tool list.
 		assert.deepEqual(policy.tools, { type: "preset", preset: "claude_code" });
 		assert.deepEqual(policy.disallowedTools, [...ASKCLAUDE_FULL_DISALLOWED_TOOLS]);

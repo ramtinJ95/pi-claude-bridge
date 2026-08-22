@@ -39,7 +39,7 @@ function details() {
 	};
 }
 
-describe("AskClaude rich tool row", () => {
+describe("DelegateToClaude rich tool row", () => {
 	it("builds Pi partial updates from the same retained snapshot the renderer receives", () => {
 		const raw = details().snapshot;
 		const update = buildAskClaudePartialUpdate(raw, {

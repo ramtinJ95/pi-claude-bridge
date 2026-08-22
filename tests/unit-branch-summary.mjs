@@ -47,18 +47,18 @@ describe("branch summarization takeover", () => {
 	it("leaves other providers alone", async () => {
 		const handler = activateWithMockPi().get("session_before_tree");
 		const result = await handler(treeEvent(preparation), { model: { baseUrl: "https://api.openai.com/v1" } });
-		assert.equal(result, undefined, "only claude-bridge models route through Claude Code");
+		assert.equal(result, undefined, "only claude-delegation models route through Claude Code");
 	});
 
 	it("declines when pi is not summarizing", async () => {
 		const handler = activateWithMockPi().get("session_before_tree");
-		const ctx = { model: { baseUrl: "claude-bridge" } };
+		const ctx = { model: { baseUrl: "claude-delegation" } };
 
 		assert.equal(await handler(treeEvent({ ...preparation, userWantsSummary: false }), ctx), undefined);
 		assert.equal(await handler(treeEvent({ ...preparation, entriesToSummarize: [] }), ctx), undefined);
 	});
 
-	it("clears the live AskClaude slot when session-tree navigation changes the active branch", () => {
+	it("clears the live DelegateToClaude slot when session-tree navigation changes the active branch", () => {
 		clearLiveAskClaudeCall();
 		updateLiveAskClaudeCall({ toolCallId: "removed-call", startedAt: 1, prompt: "p", details: { prompt: "p" } });
 		assert.equal(getLiveAskClaudeCall()?.toolCallId, "removed-call");

@@ -527,7 +527,7 @@ describe("SpawnClaudeAgent result contract", () => {
 			undefined,
 		);
 		assert.equal(
-			__test.spawnClaudeAgentResultIsError({ toolName: "AskClaude", isError: false, details: { error: true } }),
+			__test.spawnClaudeAgentResultIsError({ toolName: "DelegateToClaude", isError: false, details: { error: true } }),
 			undefined,
 		);
 		assert.equal(

@@ -1,12 +1,12 @@
-# pi-claude-bridge
+# @ramtinj95/pi-claude-delegation
 
-[![npm version](https://img.shields.io/npm/v/pi-claude-bridge)](https://www.npmjs.com/package/pi-claude-bridge)
+[![npm version](https://img.shields.io/npm/v/@ramtinj95/pi-claude-delegation)](https://www.npmjs.com/package/@ramtinj95/pi-claude-delegation)
 
-Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript). Based initially on [claude-agent-sdk-pi](https://github.com/prateekmedia/claude-agent-sdk-pi) by Prateek Sunal. This fork adds streaming, MCP tool bridging, custom pi tool bridging, session resume/persistence, context sync, thinking support, skills forwarding, and many correctness fixes.
+Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript). This package is maintained from [ramtinJ95/pi-claude-delegation](https://github.com/ramtinJ95/pi-claude-delegation), forked from [elidickinson/pi-claude-bridge](https://github.com/elidickinson/pi-claude-bridge), which was based initially on [claude-agent-sdk-pi](https://github.com/prateekmedia/claude-agent-sdk-pi) by Prateek Sunal. The inherited MIT license and upstream history are preserved.
 
 1. **Provider** — Use Opus/Sonnet/Haiku as models in pi, with all tool calls flowing through pi's TUI
-2. **AskClaude tool** — Delegate tasks or questions to Claude Code when using another provider
-3. **SpawnClaudeAgent tool** — Start an independent Claude Code agent with explicit `none`, `read`, or `full` capability and optional read-only review specialization, in the background (job ID, live widget, result on a later turn) or foreground (blocks and returns directly, like AskClaude)
+2. **DelegateToClaude tool** — Delegate tasks or questions to Claude Code when using another provider
+3. **SpawnClaudeAgent tool** — Start an independent Claude Code agent with explicit `none`, `read`, or `full` capability and optional read-only review specialization, in the background (job ID, live widget, result on a later turn) or foreground (blocks and returns directly, like DelegateToClaude)
 
 
 **FYI:** Anthropic [announced and then unannounced](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) a change to how you would be billed for tools that use the Agent SDK like this one. It currently uses your regular subscription quota just like Claude Code.
@@ -19,22 +19,40 @@ Pi extension that integrates Claude Code via the [Agent SDK](https://github.com/
 ## Install
 
 ```
-pi install npm:pi-claude-bridge
+pi install npm:@ramtinj95/pi-claude-delegation
 ```
 
 This fork requires Pi 0.84.2 or newer and Node.js 22.19 or newer.
 
+Version 0.1.0 has clean typecheck and unit/package validation. The manual
+Phase 3d dogfood checks for reload-time worker termination and checkout-write
+lease ownership have not yet been recorded; see `docs/FORK-DIRECTION.md` in
+the source repository. This is an explicit verification gap, not a claim that
+those runtime paths have been dogfooded.
+
+### Migrating from `pi-claude-bridge`
+
+This package intentionally starts a new runtime namespace. It does not read
+the old config automatically:
+
+1. Install `npm:@ramtinj95/pi-claude-delegation` and remove the old package or
+   local-path entry.
+2. Rename `claude-bridge.json` to `claude-delegation.json`.
+3. Rename the config's `askClaude` block to `delegation`.
+4. Select models under the `claude-delegation` provider. The blocking tool is
+   now `DelegateToClaude`; `SpawnClaudeAgent` keeps its name.
+
 ## Provider
 
-Use `/model` to select `claude-bridge/claude-fable-5`, `claude-bridge/claude-opus-5`, `claude-bridge/claude-opus-4-8`, `claude-bridge/claude-opus-4-7`, `claude-bridge/claude-opus-4-6`, `claude-bridge/claude-sonnet-5`, `claude-bridge/claude-sonnet-4-6`, or `claude-bridge/claude-haiku-4-5`.
+Use `/model` to select `claude-delegation/claude-fable-5`, `claude-delegation/claude-opus-5`, `claude-delegation/claude-opus-4-8`, `claude-delegation/claude-opus-4-7`, `claude-delegation/claude-opus-4-6`, `claude-delegation/claude-sonnet-5`, `claude-delegation/claude-sonnet-4-6`, or `claude-delegation/claude-haiku-4-5`.
 
 Behind the scenes, pi's tools are bridged to Claude Code but it should all work like normal in pi. Bash commands get a 120-second default timeout (matching Claude Code's default) since pi's bash has no timeout by default. Skills in pi are copied over to Claude Code's system prompt so should work as they would with any other pi provider. Steering works mid-turn: a message sent while Claude is running a tool reaches it at that tool boundary, not after the whole turn finishes.
 
 **1M Context:** Opus 5, Opus 4.8, and Opus 4.7 get 1M context by default. Opus 4.6 only gets 1M if you're on a Max plan or pay for Extra Usage. Sonnet 4.6 only gets 1M if you pay for Extra Usage. You will need to set `provider.plan` and/or `provider.longContextExtraUsage` for 1M context in Opus 4.6/Sonnet 4.6 as described in [Configuration](#configuration).
 
-## AskClaude Tool
+## DelegateToClaude Tool
 
-Opt-in: set `askClaude.enabled` to `true` (see [Configuration](#configuration)). Available when using any non-claude-bridge provider. Pi's LLM can delegate tasks to Claude Code and wait for it to answer a question or perform a task. Examples of how to use:
+Opt-in: set `delegation.enabled` to `true` (see [Configuration](#configuration)). Available when using any non-claude-delegation provider. Pi's LLM can delegate tasks to Claude Code and wait for it to answer a question or perform a task. Examples of how to use:
 
 - "Ask Claude to plan a fix"
 - "If you get stuck, ask claude for help"
@@ -52,7 +70,7 @@ You could also create skills or add something to AGENTS.md to e.g. "Always call 
 - **`thinking`** — effort level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`
 - **`isolated`** — when `true`, Claude gets a fresh conversation with no Pi history or persisted Claude session (default: `true`). This is conversation isolation, not a hermetic process: working-directory access, settings, sandbox, and managed policy still apply.
 
-While a call runs, AskClaude streams Claude's response and a compact tool/action
+While a call runs, DelegateToClaude streams Claude's response and a compact tool/action
 summary into one Pi tool row. Expand the row for the prompt, emitted thinking
 summaries, a grouped action summary with one aggregate tool-status line,
 usage/cost, session metadata, observed permission or managed-policy state, and
@@ -65,26 +83,26 @@ redaction; the model-facing result is separately capped at about 16k characters.
 ### Claude Sessions overlay
 
 For deep inspection beyond the inline row, `/claude-details` opens one centered
-overlay over every Claude delegation in the session — AskClaude calls,
+overlay over every Claude delegation in the session — DelegateToClaude calls,
 foreground SpawnClaudeAgent calls, and background SpawnClaudeAgent jobs — as a
 single flat chronological list with clear kind/mode/agent/status labels.
 Foreground SpawnClaudeAgent calls appear as foreground Claude records labelled
 `SpawnClaudeAgent <agent> (foreground)`, read from the same persisted
-tool-call/result pairs as AskClaude records (no new persistence format), and
+tool-call/result pairs as DelegateToClaude records (no new persistence format), and
 they update live and survive session restores the same way. `Ctrl+N` toggles the same overlay. When a
 background job is running, opening the overlay focuses it first; otherwise it
 focuses the chronologically latest record. `/claude-details 2` opens record #2
-of the merged list. AskClaude records are read from the current session
+of the merged list. DelegateToClaude records are read from the current session
 branch's persisted tool-call/result pairs; background records come from the
 persisted `claude-background-job` completion entries merged with the in-memory
 job manager (which supplies running state and is the terminal fallback if no
 entry was persisted). Completed records stay inspectable after a session
-resume, and the running AskClaude call or background job updates live while
+resume, and the running DelegateToClaude call or background job updates live while
 the overlay is open.
 
-`/askclaude-details` remains as a compatibility alias: it opens the same
-unfiltered overlay focused on the latest AskClaude record, and
-`/askclaude-details 2` counts actual AskClaude compatibility calls only —
+`/askclaude-details` remains as a legacy command alias: it opens the same
+unfiltered overlay focused on the latest DelegateToClaude record, and
+`/askclaude-details 2` counts actual DelegateToClaude compatibility calls only —
 foreground SpawnClaudeAgent calls and background jobs are skipped, preserving
 the command's original numbering — before mapping to the merged list. It is
 not a separately filtered view.
@@ -94,7 +112,7 @@ the shortcut in the main editor, so Pi may report that overlap as an extension
 shortcut warning at startup; the session picker's focused binding still works.
 
 The pinned header shows only what the Claude delegation itself reported. For
-AskClaude records: runtime model, tokens/cache/cost/turns, Claude session ID,
+DelegateToClaude records: runtime model, tokens/cache/cost/turns, Claude session ID,
 Claude working directory, runtime permission mode, status, capability,
 isolation, and requested thinking level. For background records: capability mode and derived agent role,
 status, runtime/requested model, thinking, permission and managed-policy
@@ -116,9 +134,9 @@ previous/next record, and `q`, `Esc`, or `Ctrl+N` close.
 
 ## SpawnClaudeAgent Tool
 
-Registered together with AskClaude (`askClaude.enabled: true`). Like AskClaude
-it is for non-claude-bridge providers only: when the active provider is
-claude-bridge the tool returns a visible error instead of delegating in a
+Registered together with DelegateToClaude (`delegation.enabled: true`). Like DelegateToClaude
+it is for non-claude-delegation providers only: when the active provider is
+claude-delegation the tool returns a visible error instead of delegating in a
 circle. Pi's LLM can start one independent Claude Code agent in either
 execution mode:
 
@@ -133,23 +151,23 @@ execution mode:
   conversation exactly once when it reaches a terminal state (see below).
 - **`execution: "foreground"`** — the tool call blocks until the agent
   finishes and returns its bounded result directly, through the same
-  foreground implementation as AskClaude: same delegation runner, live
+  foreground implementation as DelegateToClaude: same delegation runner, live
   progress in the tool row, retained snapshot, rich rendering, error
   semantics, and Claude Sessions overlay record. Foreground calls may choose
   `isolated: false` to share the Pi conversation context (exactly like
-  AskClaude's shared mode); background jobs are always fresh and isolated, and
+  DelegateToClaude's shared mode); background jobs are always fresh and isolated, and
   `execution: "background"` with `isolated: false` is rejected with a visible
   error rather than silently ignored.
 
 Both modes run through the same delegation engine and policy resolver as
-AskClaude, with `permissionMode` taken from the same `askClaude` configuration
+DelegateToClaude, with `permissionMode` taken from the same `delegation` configuration
 (default `"auto"`; bypass is never hard-coded).
 
 ### Parameters
 
 - **`task`** — the body of work. Include everything the agent needs; by
   default it has no Pi conversation history.
-- **`mode`** — the same explicit capability vocabulary as AskClaude:
+- **`mode`** — the same explicit capability vocabulary as DelegateToClaude:
   - `none`: no repository, filesystem, shell, agent, or web tools. The derived
     advisor role answers only from the task and general knowledge.
   - `read`: structurally limited to Read, Glob, Grep, WebFetch, and WebSearch —
@@ -159,7 +177,7 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
     settings). The derived worker edits the current checkout and its role
     prompt forbids committing, pushing, opening PRs, branch changes, and
     destructive cleanup unless the task explicitly authorizes them. Full mode
-    is offered only while `askClaude.allowFullMode` permits it.
+    is offered only while `delegation.allowFullMode` permits it.
 - **`review`** — optional code-review specialization, valid only with
   `mode: "read"`. Pass `{}` to review staged, unstaged, and untracked changes
   against `HEAD`, or `{ "base": "main" }` for a branch/PR review spanning the
@@ -172,8 +190,8 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
   or false assertions reject the full-mode call visibly; supplying it in
   `none` or `read` mode is also rejected.
 - **`isolated`** — foreground only; `true` (default) for a fresh session,
-  `false` to share Pi conversation history like AskClaude.
-- **`model`** / **`thinking`** — same semantics and defaults as AskClaude.
+  `false` to share Pi conversation history like DelegateToClaude.
+- **`model`** / **`thinking`** — same semantics and defaults as DelegateToClaude.
 
 The UI derives familiar agent labels from the contract: `none` → advisor,
 `read` → explorer, `read` plus `review` → reviewer, and `full` → worker. These
@@ -187,7 +205,7 @@ authority.
   limit — Pi is blocked while they run.
 - **Single-writer contract for full-capability Claude calls:** one atomic,
   process-wide checkout lease covers background workers, foreground workers,
-  and AskClaude `mode: "full"`. A second Claude writer fails visibly, including
+  and DelegateToClaude `mode: "full"`. A second Claude writer fails visibly, including
   across an extension reload while an old worker has not actually settled.
   Background worker results and the live widget also warn the main agent to
   inspect/discuss only. The lease remains held after an `abandoned` status
@@ -195,9 +213,9 @@ authority.
   interrupt and immediately closes the SDK transport so a wedged interrupt
   cannot keep editing behind a dismissed warning. A dedicated git-worktree
   lifecycle is deliberately deferred.
-- AskClaude remains a compatibility tool for now. SpawnClaudeAgent foreground
+- DelegateToClaude remains a compatibility tool for now. SpawnClaudeAgent foreground
   execution now covers its `none`/`read`/`full` capability vocabulary plus its
-  blocking/live/session-sharing mechanics; removing AskClaude is a separate
+  blocking/live/session-sharing mechanics; removing DelegateToClaude is a separate
   post-dogfooding compatibility decision.
 - Agents launch from Pi's execute-context working directory (the session cwd),
   not a guessed repository.
@@ -262,11 +280,11 @@ When a job reaches a terminal state, its result is delivered exactly once:
 
 ## Configuration
 
-Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config directory, usually `.pi/claude-bridge.json` (project; merged over global).
+Config: `~/.pi/agent/claude-delegation.json` (global) or the project Pi config directory, usually `.pi/claude-delegation.json` (project; merged over global).
 
 ```json
 {
-  "askClaude": {
+  "delegation": {
     "enabled": true,
     "allowFullMode": true,
     "defaultIsolated": true,
@@ -283,14 +301,14 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 }
 ```
 
-`askClaude`:
-- `enabled` — register the AskClaude and SpawnClaudeAgent tools (default `false`). If it's unset, the startup notice below points this out once.
-- `name` — override the tool's pi-side name (default `"AskClaude"`)
-- `label` — override the TUI label (default `"Ask Claude Code"`)
+`delegation`:
+- `enabled` — register the DelegateToClaude and SpawnClaudeAgent tools (default `false`). If it's unset, the startup notice below points this out once.
+- `name` — override the tool's pi-side name (default `"DelegateToClaude"`)
+- `label` — override the TUI label (default `"Delegate to Claude"`)
 - `description` — override the tool description. Default when `allowFullMode: true`: *"Delegate to Claude Code for a second opinion or analysis (code review, architecture questions, debugging theories), or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. Prefer to handle straightforward tasks yourself."*
 - `defaultMode` — `"read"` (default), `"none"`, or `"full"`
 - `defaultIsolated` — start each call in a fresh conversation without Pi history or Claude session persistence (default `true`)
-- `allowFullMode` — allow `mode: "full"`; set `false` to remove full capability from both AskClaude and SpawnClaudeAgent.
+- `allowFullMode` — allow `mode: "full"`; set `false` to remove full capability from both DelegateToClaude and SpawnClaudeAgent.
 - `appendSkills` — forward pi's skills block into the system prompt (default `true`)
 - `permissionMode` — Claude Code permission policy within the selected capability mode (default `"auto"`). Supported SDK values are `"auto"`, `"default"`, `"acceptEdits"`, `"dontAsk"`, `"plan"`, and `"bypassPermissions"`. Bypass is dangerous, must be explicit, and cannot override organization-managed policy.
 
@@ -313,7 +331,7 @@ effective.
 Capability and permission are independent: `mode` controls which tools exist,
 while `permissionMode` controls how Claude Code governs calls to those tools.
 Claude Code may replace the requested permission mode because of user, project,
-or managed settings. AskClaude renders the requested and runtime modes when they
+or managed settings. DelegateToClaude renders the requested and runtime modes when they
 differ and reports observable permission denials; the provider emits the same
 override as a warning. The bridge also summarizes non-sensitive constraints that
 the Agent SDK attributes to its managed settings tier (for example, required
@@ -323,9 +341,9 @@ expose a complete effective sandbox decision, so the bridge does not claim that
 this summary is exhaustive.
 
 
-**Startup notice:** the first interactive session to reach Claude Code lists whichever of `provider.plan` and `askClaude.enabled` you have left unset, then records `startupNoticeShown` (the date, `YYYY-MM-DD`) in the global config so it doesn't nag again.
+**Startup notice:** the first interactive session to reach Claude Code lists whichever of `provider.plan` and `delegation.enabled` you have left unset, then records `startupNoticeShown` (the date, `YYYY-MM-DD`) in the global config so it doesn't nag again.
 
-**Extension providers and models.json:** pi's `modelOverrides` in `~/.pi/agent/models.json` do not currently apply to extension-registered providers (like claude-bridge). Overriding `contextWindow` or other fields requires editing `src/models.ts` directly.
+**Extension providers and models.json:** pi's `modelOverrides` in `~/.pi/agent/models.json` do not currently apply to extension-registered providers (like claude-delegation). Overriding `contextWindow` or other fields requires editing `src/models.ts` directly.
 
 ## Tests
 
@@ -343,7 +361,7 @@ Integration tests spawn real `pi` and Claude Code subprocesses, so they need wri
 
 Set `CLAUDE_BRIDGE_DEBUG=1` to enable debug output:
 
-- **Bridge log** at `~/.pi/agent/claude-bridge.log` — every provider call, session sync decision, tool result delivery, and CC's stderr. Override location with `CLAUDE_BRIDGE_DEBUG_PATH`.
+- **Bridge log** at `~/.pi/agent/claude-delegation.log` — every provider call, session sync decision, tool result delivery, and CC's stderr. Override location with `CLAUDE_BRIDGE_DEBUG_PATH`.
 - **Per-query Claude Code CLI logs** at `~/.pi/agent/cc-cli-logs/<timestamp>-<tag>-<seq>.log` — the CC subprocess's own debug stream, one file per `query()` call. Tags are `provider` (main turn) or `askclaude` (sub-delegation). Useful when a resume fails or CC misbehaves internally — shows the CLI's own view of session loading, API requests, and tool calls.
 
 When filing a bug about a session-resume failure (e.g. "No conversation found"), the most useful attachments are the `syncResult:` lines from the bridge log plus the matching `cc-cli-logs/` file for the failing query.

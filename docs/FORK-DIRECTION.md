@@ -7,7 +7,7 @@ before implementation.
 
 ## Starting point
 
-- Fork: `ramtinJ95/pi-claude-bridge`
+- Fork: `ramtinJ95/pi-claude-delegation`
 - Upstream: `elidickinson/pi-claude-bridge`
 - Forked from upstream commit `500eea1`
 - Preserve the existing MIT license, attribution, Git history, test suite, and
@@ -17,7 +17,7 @@ before implementation.
   scratch.
 - Keep taking upstream correctness fixes selectively while the fork diverges in
   product behavior and UI.
-- PR #1 already fixed effective AskClaude defaults across schema text, call
+- PR #1 already fixed effective DelegateToClaude defaults across schema text, call
   rendering, and execution, including malformed-config fail-closed behavior.
 
 ## Product direction
@@ -27,11 +27,11 @@ capable of running independent background agents without expanding Pi's native
 tool surface unnecessarily.
 
 The intended experience now centers on `SpawnClaudeAgent`: `mode` selects the
-same explicit `none`/`read`/`full` capability contract as AskClaude, optional
+same explicit `none`/`read`/`full` capability contract as DelegateToClaude, optional
 `review` specializes read mode with a frozen launch diff, and `execution`
 selects foreground/blocking or background/nonblocking delivery. Advisor,
 explorer, reviewer, and worker are derived role/presentation labels rather than
-capability inputs. `AskClaude` remains a temporary compatibility surface while
+capability inputs. `DelegateToClaude` remains a temporary compatibility surface while
 runtime parity and removal UX are evaluated.
 
 Pi's existing `spawn_agent` remains separate and Pi-native. This fork will not
@@ -69,7 +69,7 @@ Permission mode answers how allowed operations are governed. It must not be
 implied by capability mode.
 
 - Default the fork's Claude Code queries to `permissionMode: "auto"`, including
-  both `AskClaude` and the Claude provider path.
+  both `DelegateToClaude` and the Claude provider path.
 - Make permission mode configurable instead of hard-coding
   `bypassPermissions`.
 - Never attempt to bypass organization-managed Claude policy.
@@ -99,7 +99,7 @@ Tests must cover non-package defaults, especially:
 
 Foreground Claude delegation should expose substantially more of the Claude
 Code session without forcing all of it into the main model's context. This was
-first built for `AskClaude`; foreground `SpawnClaudeAgent` now uses the same
+first built for `DelegateToClaude`; foreground `SpawnClaudeAgent` now uses the same
 runner, retained event model, live updates, and unified details overlay rather
 than maintaining a second observability path.
 
@@ -159,12 +159,12 @@ All derived roles:
 - Run in independent Claude sessions by default.
 - Receive a stable context snapshot at launch.
 - Support configurable Claude model and effort.
-- Emit the same normalized events and telemetry as blocking `AskClaude`.
+- Emit the same normalized events and telemetry as blocking `DelegateToClaude`.
 - Can run in foreground or background; foreground may explicitly share Pi
   conversation history.
 
 None/read modes remain structurally bounded. Full-mode mutation uses one
-process-global checkout lease shared with AskClaude full mode, so concurrent
+process-global checkout lease shared with DelegateToClaude full mode, so concurrent
 Claude writers fail visibly, including across extension reload. A background
 full-mode worker also exposes a single-writer warning requiring the main agent to avoid
 mutating the checkout until the worker actually settles.
@@ -249,7 +249,7 @@ inventing a fake response. Before larger feature work:
 
 ### 10. Use safe, session-scoped delegation defaults
 
-The fork defaults `AskClaude` to `read` capability mode and `isolated: true`.
+The fork defaults `DelegateToClaude` to `read` capability mode and `isolated: true`.
 Users must explicitly request shared Pi history or mutation. Treat this as a
 documented fork behavior change for every configuration that omits those keys;
 schemas, descriptions, and renderers must expose the effective defaults.
@@ -283,7 +283,7 @@ runner:
   result routing, steering, reentrant `QueryContext` handling, and shared-session
   synchronization.
 - The **delegation lane** uses one Claude-native runner for foreground
-  `AskClaude`/`SpawnClaudeAgent` calls and background jobs.
+  `DelegateToClaude`/`SpawnClaudeAgent` calls and background jobs.
 - Share only pure query policy/options resolution and normalized SDK event
   parsing where doing so removes real duplication.
 
@@ -314,7 +314,7 @@ adapters:
 ### Delegation runner
 
 - Own one Claude-native Agent SDK query lifecycle.
-- Power both blocking `AskClaude` and background jobs.
+- Power both blocking `DelegateToClaude` and background jobs.
 - Consume normalized events and expose cancellation without importing provider
   `QueryContext` or MCP result routing.
 
@@ -346,7 +346,7 @@ adapters:
 
 ### Pi adapter and UI
 
-- Register the provider, `AskClaude`, `SpawnClaudeAgent`, and the single
+- Register the provider, `DelegateToClaude`, `SpawnClaudeAgent`, and the single
   `ClaudeAgentJob` lifecycle tool while the compatibility surface remains.
 - Render blocking sessions and background jobs from the same normalized event
   model.
@@ -366,20 +366,20 @@ adapters:
 
 ### Completed through Phase 3c
 
-- PRs [#2](https://github.com/ramtinJ95/pi-claude-bridge/pull/2)–[#7](https://github.com/ramtinJ95/pi-claude-bridge/pull/7)
+- PRs [#2](https://github.com/ramtinJ95/pi-claude-delegation/pull/2)–[#7](https://github.com/ramtinJ95/pi-claude-delegation/pull/7)
   established the Pi 0.84.2 baseline, structural capability/permission policy,
-  shared delegation runner, bounded telemetry, rich AskClaude rendering, and
+  shared delegation runner, bounded telemetry, rich DelegateToClaude rendering, and
   the original details overlay.
-- [PR #8](https://github.com/ramtinJ95/pi-claude-bridge/pull/8) added the
+- [PR #8](https://github.com/ramtinJ95/pi-claude-delegation/pull/8) added the
   session-scoped background job core and read-only explorer/reviewer profiles.
-- [PR #9](https://github.com/ramtinJ95/pi-claude-bridge/pull/9) added the live
+- [PR #9](https://github.com/ramtinJ95/pi-claude-delegation/pull/9) added the live
   widget, human cancellation, restore-safe completion entries, and bounded
   next-turn delivery.
-- [PR #10](https://github.com/ramtinJ95/pi-claude-bridge/pull/10) replaced the
-  AskClaude-only viewer with the unified Claude Sessions overlay.
-- [PR #11](https://github.com/ramtinJ95/pi-claude-bridge/pull/11) completed
+- [PR #10](https://github.com/ramtinJ95/pi-claude-delegation/pull/10) replaced the
+  DelegateToClaude-only viewer with the unified Claude Sessions overlay.
+- [PR #11](https://github.com/ramtinJ95/pi-claude-delegation/pull/11) completed
   Phase 3c: worker profile, foreground/background execution, shared foreground
-  AskClaude compatibility path, structured worker authorization, immediate
+  DelegateToClaude compatibility path, structured worker authorization, immediate
   hard-close on cancellation, and one process-global checkout write lease
   across every full-capability Claude delegation.
 
@@ -390,21 +390,21 @@ Runtime dogfooding has not yet been recorded.
 ### Phase 3d in progress: consolidate SpawnClaudeAgent capability
 
 Before Phase 4, replace SpawnClaudeAgent's public `profile` input with the same
-explicit `none | read | full` capability modes AskClaude uses. Keep review as
+explicit `none | read | full` capability modes DelegateToClaude uses. Keep review as
 an optional read-only specialization (`review: { base?: string }`) because a
 frozen diff and review role prompt are task shaping, not another capability
 mode. Derive advisor/explorer/reviewer/worker labels for prompts and UI only.
 
-This gives foreground SpawnClaudeAgent behavioral parity with AskClaude's
+This gives foreground SpawnClaudeAgent behavioral parity with DelegateToClaude's
 capability vocabulary while preserving background execution, explicit full-mode
 authorization, reviewer artifact capture, and every existing lease/lifecycle
-invariant. Keep AskClaude registered through the runtime gate; removal is a
+invariant. Keep DelegateToClaude registered through the runtime gate; removal is a
 separate compatibility change, not part of the contract migration.
 
 ### Current handoff: dogfood Phase 3d
 
 This checkout is loaded directly from
-`/Users/ramtin/personal/pi-claude-bridge`; after local `main` is updated,
+`/Users/ramtin/personal/pi-claude-delegation`; after local `main` is updated,
 `/reload` activates Phase 3d. Start Pi from the repository root for review tests
 because diff capture deliberately fails outside a Git worktree.
 
@@ -423,13 +423,13 @@ Run these checks in order and record observed results here:
    overlay.
 4. **Background full-mode ownership:** run one harmless worker and confirm the
    spawn/widget warning. While it runs, verify a second background worker,
-   foreground worker, and AskClaude full call all fail on the same checkout
+   foreground worker, and DelegateToClaude full call all fail on the same checkout
    lease. Cancel mid-edit and confirm the lease releases only after real
    settlement.
 5. **Reload/termination:** reload during a long worker. Confirm the SDK child is
    gone, no orphan keeps editing, and a replacement runtime cannot acquire the
    writer lease before the old executor settles.
-6. **Restore and layout:** resume the session and inspect mixed AskClaude,
+6. **Restore and layout:** resume the session and inspect mixed DelegateToClaude,
    foreground SpawnClaudeAgent, and background records through `Ctrl+N`,
    `/claude-details`, and `/claude-jobs`; check small-terminal and fullscreen
    rendering.
@@ -442,8 +442,8 @@ widget, structural read-only tools, and later-turn result delivery. Do not
 repeat that run unless another change touches those paths.
 
 After the gate passes, proceed to Phase 4. SpawnClaudeAgent foreground now
-covers AskClaude's none/read/full capability vocabulary, blocking delivery,
-telemetry, and shared-session behavior. AskClaude removal does not need to block
+covers DelegateToClaude's none/read/full capability vocabulary, blocking delivery,
+telemetry, and shared-session behavior. DelegateToClaude removal does not need to block
 the lifecycle tool, but its deprecation/removal timeline must be decided and
 documented separately.
 
@@ -540,9 +540,9 @@ exposing model-initiated cancellation, not optional polish.
 
 These implementation and later-product decisions remain open:
 
-1. **AskClaude compatibility:** after Phase 3d dogfooding confirms
+1. **DelegateToClaude compatibility:** after Phase 3d dogfooding confirms
    SpawnClaudeAgent parity for none/read/full foreground calls, decide the
-   AskClaude deprecation and removal timeline.
+   DelegateToClaude deprecation and removal timeline.
 2. **Launch cwd:** decide whether repository-root Pi startup remains the
    reviewer contract or SpawnClaudeAgent needs an explicit cwd parameter.
 3. **Provider scope:** decide how much rich telemetry and UI from delegation

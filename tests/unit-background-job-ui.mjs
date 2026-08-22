@@ -136,7 +136,7 @@ function mountWidget(ui) {
 }
 
 describe("background job UI registration", () => {
-	it("keeps restored entries renderable when the AskClaude opt-in is off", async () => {
+	it("keeps restored entries renderable when the DelegateToClaude opt-in is off", async () => {
 		const pi = fakePi();
 		registerBackgroundJobUI(pi, { enabled: false, jobs: new BackgroundJobManager({ idPrefix: "t" }) });
 		assert.equal(pi.handlers.size, 0);

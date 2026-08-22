@@ -1,5 +1,5 @@
 /**
- * AskClaude finalization contract.
+ * DelegateToClaude finalization contract.
  *
  * runDelegation resolves — rather than throws — on cancellation so the partial
  * answer and tool activity survive. That makes this glue the only thing standing
@@ -42,7 +42,7 @@ function finalize(overrides = {}) {
 	});
 }
 
-describe("AskClaude finalization", () => {
+describe("DelegateToClaude finalization", () => {
 	it("returns Claude's answer and its actions on a normal stop", () => {
 		const { content, details } = finalize({ responseText: "ANSWER", snapshot: { tools: [readTool("a.ts")] } });
 
@@ -93,15 +93,15 @@ describe("AskClaude finalization", () => {
 		const cancelled = finalize({ stopReason: "cancelled" }).details;
 
 		assert.deepEqual(
-			askClaudeResultIsError({ toolName: "AskClaude", isError: false, details: cancelled }),
+			askClaudeResultIsError({ toolName: "DelegateToClaude", isError: false, details: cancelled }),
 			{ isError: true },
 		);
 		assert.equal(
-			askClaudeResultIsError({ toolName: "AskClaude", isError: false, details: finalize({ responseText: "ANSWER" }).details }),
+			askClaudeResultIsError({ toolName: "DelegateToClaude", isError: false, details: finalize({ responseText: "ANSWER" }).details }),
 			undefined,
 		);
 		assert.equal(askClaudeResultIsError({ toolName: "bash", isError: false, details: cancelled }), undefined);
-		assert.equal(askClaudeResultIsError({ toolName: "AskClaude", isError: true, details: cancelled }), undefined);
+		assert.equal(askClaudeResultIsError({ toolName: "DelegateToClaude", isError: true, details: cancelled }), undefined);
 	});
 
 	it("bounds and redacts the model-facing result and retained snapshot", () => {

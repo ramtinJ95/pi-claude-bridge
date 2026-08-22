@@ -1,10 +1,10 @@
 // Claude Sessions overlay: one Pi-native centered overlay for deep inspection
-// of every Claude delegation in the session — blocking AskClaude calls,
+// of every Claude delegation in the session — blocking DelegateToClaude calls,
 // foreground SpawnClaudeAgent calls, and background SpawnClaudeAgent jobs —
 // opened with /claude-details (canonical), /askclaude-details (compatibility
 // alias), /claude-jobs, or ctrl+n.
 //
-// AskClaude records are read from the current session branch's persisted
+// DelegateToClaude records are read from the current session branch's persisted
 // tool-call/result pairs (askclaude-details.ts) plus a single in-memory live
 // slot for the running call. Background records come from persisted
 // `claude-background-job` completion entries merged with the
@@ -42,9 +42,9 @@ import {
 import type { RenderTheme } from "./askclaude-ui.js";
 import type { BackgroundJobManager } from "./background-jobs.js";
 
-// --- Live AskClaude call slot ---
+// --- Live DelegateToClaude call slot ---
 //
-// One slot, latest call only. Updated from the AskClaude execute path with the
+// One slot, latest call only. Updated from the DelegateToClaude execute path with the
 // same retained details object it publishes to Pi partial updates; replaced by
 // the next call and shadowed by the persisted record once the branch has it.
 
@@ -143,7 +143,7 @@ export class ClaudeSessionsOverlay {
 			this.selectedRecordId = this.records[this.recordIndex].id;
 		}
 		// The overlay subscribes to both live sources while open and releases
-		// both on dispose: the AskClaude live slot and the background manager.
+		// both on dispose: the DelegateToClaude live slot and the background manager.
 		this.unsubscribeLive = subscribeLiveAskClaudeCall(() => this.reload());
 		this.unsubscribeJobs = jobs?.subscribe(() => this.reload()) ?? (() => {});
 		// Manager snapshots are event-driven, so a quiet background job may not
@@ -340,7 +340,7 @@ export function registerClaudeSessionsUI(
 	const loadRecordsFor = (ctx: ExtensionContext) => () => {
 		const entries = ctx.sessionManager.getBranch();
 		// Foreground SpawnClaudeAgent calls are extracted as foreground Claude
-		// records alongside AskClaude compatibility calls; background spawns are
+		// records alongside DelegateToClaude compatibility calls; background spawns are
 		// covered by the job records below.
 		const calls = mergeLiveCall(extractAskClaudeCalls(entries, toolName, spawnToolName), getLiveAskClaudeCall());
 		const background = mergeBackgroundJobRecords(extractBackgroundJobRecords(entries), jobs.list());
@@ -399,7 +399,7 @@ export function registerClaudeSessionsUI(
 	});
 
 	// Compatibility alias: same unfiltered overlay, focused on the latest
-	// AskClaude record; <n> is resolved among AskClaude calls only, preserving
+	// DelegateToClaude record; <n> is resolved among DelegateToClaude calls only, preserving
 	// this command's original numbering semantics.
 	pi.registerCommand("askclaude-details", {
 		description: `Alias of /claude-details focused on ${toolName} calls (optionally: /askclaude-details <call number>)`,

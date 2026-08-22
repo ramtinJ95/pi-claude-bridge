@@ -5,7 +5,7 @@ import { clearLiveAskClaudeCall, getLiveAskClaudeCall } from "../src/claude-sess
 
 const { executeForegroundDelegation } = __test;
 
-// The shared foreground execution implementation: blocking AskClaude calls and
+// The shared foreground execution implementation: blocking DelegateToClaude calls and
 // foreground SpawnClaudeAgent calls both run through it, so these tests cover
 // success, failure, cancellation, live updates, the live overlay slot, and the
 // wrapper-parity guarantee (label extras are the only difference between the
@@ -130,22 +130,22 @@ describe("shared foreground delegation execution", () => {
 		assert.ok(result.content[0].text.includes("partial narration"));
 	});
 
-	it("differs between AskClaude and SpawnClaudeAgent callers only by the persisted label extras", async () => {
-		const askClaude = await run();
+	it("differs between DelegateToClaude and SpawnClaudeAgent callers only by the persisted label extras", async () => {
+		const delegation = await run();
 		clearLiveAskClaudeCall();
 		const spawn = await run({
 			mode: "full",
 			detailExtras: { origin: "spawn-foreground", profile: "worker" },
 		});
 
-		assert.equal(askClaude.details.origin, undefined);
+		assert.equal(delegation.details.origin, undefined);
 		assert.equal(spawn.details.origin, "spawn-foreground");
 		assert.equal(spawn.details.profile, "worker");
 		assert.equal(spawn.details.capabilityMode, "full");
 		assert.equal(getLiveAskClaudeCall().details.origin, "spawn-foreground");
 		// Same result/telemetry shape from the one implementation.
-		assert.deepEqual(Object.keys(askClaude.details).sort(),
+		assert.deepEqual(Object.keys(delegation.details).sort(),
 			Object.keys(spawn.details).sort().filter((key) => key !== "origin" && key !== "profile"));
-		assert.equal(askClaude.content[0].text, spawn.content[0].text);
+		assert.equal(delegation.content[0].text, spawn.content[0].text);
 	});
 });

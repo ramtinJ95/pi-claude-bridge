@@ -1,20 +1,31 @@
 {
-  "name": "pi-claude-bridge",
-  "version": "0.7.0",
+  "name": "@ramtinj95/pi-claude-delegation",
+  "version": "0.0.0",
   "private": false,
-  "description": "Pi extension that uses Claude Code (via Agent SDK) as a model provider and adds an AskClaude tool.",
+  "description": "Pi extension providing Claude Code models and explicit foreground/background Claude delegation tools.",
   "keywords": [
     "pi-package",
     "pi",
     "extension",
     "claude-code",
-    "claude-agent-sdk"
+    "claude-agent-sdk",
+    "delegation"
   ],
-  "author": "Eli Dickinson",
+  "author": "ramtinJ95",
+  "contributors": [
+    "Eli Dickinson (original pi-claude-bridge author)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elidickinson/pi-claude-bridge.git"
+    "url": "git+https://github.com/ramtinJ95/pi-claude-delegation.git"
+  },
+  "homepage": "https://github.com/ramtinJ95/pi-claude-delegation#readme",
+  "bugs": {
+    "url": "https://github.com/ramtinJ95/pi-claude-delegation/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22.19.0"
@@ -35,7 +46,7 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.141",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "cc-session-io": "^0.4.0",
     "change-case": "^5.4.4"
   },

@@ -25,7 +25,7 @@ export const ASKCLAUDE_READ_TOOLS = [
 	"WebSearch",
 ] as const;
 
-// These require interaction or host lifecycle support that AskClaude does not
+// These require interaction or host lifecycle support that DelegateToClaude does not
 // provide. Full capability still excludes them; permission policy is separate.
 export const ASKCLAUDE_FULL_DISALLOWED_TOOLS = [
 	"AskUserQuestion",
@@ -77,7 +77,7 @@ export function resolveProviderPermissionPolicy(config: Config["provider"] = {})
 
 export function resolveDelegationPolicy(
 	mode: CapabilityMode,
-	config: Config["askClaude"] = {},
+	config: Config["delegation"] = {},
 ): DelegationPolicy {
 	const permission = permissionPolicy(config?.permissionMode);
 

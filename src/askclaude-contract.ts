@@ -20,11 +20,11 @@ const ANALYSIS_USE_CASES = "code review, architecture questions, debugging theor
 const PREFER_DIRECT = "Prefer to handle straightforward tasks yourself.";
 
 /**
- * Build the model-facing AskClaude contract from the same effective defaults
+ * Build the model-facing DelegateToClaude contract from the same effective defaults
  * execution uses. Keeping this in one value prevents the schema, rendering and
  * runtime from each inventing their own default.
  */
-export function buildAskClaudeContract(config: Config["askClaude"] = {}): AskClaudeContract {
+export function buildAskClaudeContract(config: Config["delegation"] = {}): AskClaudeContract {
 	// Full mode is available by default, but malformed JSON must not become an
 	// accidental opt-in. Only the documented boolean true (or omission) enables it.
 	const allowFull = config?.allowFullMode === undefined || config.allowFullMode === true;

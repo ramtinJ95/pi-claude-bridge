@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A/B usage comparison: pi-claude-bridge vs Claude Code direct.
+# A/B usage comparison: pi-claude-delegation vs Claude Code direct.
 # Runs the same conversation through both paths and compares
 # subscription usage delta and token metrics.
 #
@@ -58,7 +58,7 @@ build_prompts() {
   PROMPTS=()
   PROMPTS+=("Read package.json and explain what this project does based on its dependencies, scripts, and metadata. Be thorough.")
   PROMPTS+=("Write a detailed summary of what you just learned to $tmpfile")
-  PROMPTS+=("Read README.md and explain the architecture — how does the provider work, what is AskClaude, how do they interact?")
+  PROMPTS+=("Read README.md and explain the architecture — how does the provider work, what is DelegateToClaude, how do they interact?")
   PROMPTS+=("Read tsconfig.json and explain all the compiler options and why they might have been chosen.")
   PROMPTS+=("What are the tradeoffs of using the Agent SDK as a provider vs direct API access? Think through caching, latency, token overhead.")
   PROMPTS+=("Read $tmpfile back and compare it to what you now know. What did you miss in the first summary?")
@@ -129,11 +129,11 @@ echo "Turns: $NUM_TURNS"
 echo ""
 
 # ============================================================
-# Run A: pi-claude-bridge
+# Run A: pi-claude-delegation
 # ============================================================
 
 echo "=========================================="
-echo "  Run A: pi-claude-bridge"
+echo "  Run A: pi-claude-delegation"
 echo "=========================================="
 
 echo "Fetching usage before..."
@@ -148,7 +148,7 @@ LOGFILE_A="$LOGDIR/usage-test-bridge.ndjson"
 echo ""
 echo "Running bridge conversation..."
 timeout 600 pi --no-session -ne -e "$DIR" \
-  --model "claude-bridge/$MODEL" \
+  --model "claude-delegation/$MODEL" \
   --mode json \
   "${PROMPT_ARGS[@]}" \
   > "$LOGFILE_A" 2>"$LOGFILE_A.err"

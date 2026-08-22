@@ -27,6 +27,10 @@ describe("checkout write lease", () => {
 
 	it("shares state across global wrappers used by replacement extension runtimes", () => {
 		const firstRuntime = globalCheckoutWriteLease();
+		assert.ok(
+			globalThis[Symbol.for("pi-claude-bridge.checkout-write-lease-state")],
+			"the package rename must preserve the legacy process-global coordination key",
+		);
 		const handle = firstRuntime.tryAcquire({ id: "reload-worker", label: "old runtime worker" });
 		assert.ok(handle);
 		try {

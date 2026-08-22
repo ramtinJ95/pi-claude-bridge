@@ -152,7 +152,7 @@ describe("Claude query permission policy", () => {
 	});
 });
 
-describe("AskClaude capability policy", () => {
+describe("DelegateToClaude capability policy", () => {
 	it("uses a structural read-only tool inventory without nested Agent", () => {
 		const policy = resolveDelegationPolicy("read");
 

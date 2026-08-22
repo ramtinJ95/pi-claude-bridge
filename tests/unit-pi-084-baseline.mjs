@@ -28,7 +28,7 @@ describe("Pi 0.84.2 baseline", () => {
 	});
 
 	it("loads the extension and registers its provider in the local Pi CLI", () => {
-		const scratch = mkdtempSync(join(tmpdir(), "pi-claude-bridge-load-"));
+		const scratch = mkdtempSync(join(tmpdir(), "pi-claude-delegation-load-"));
 		try {
 			const pi = join(ROOT, "node_modules/.bin/pi");
 			const extension = join(ROOT, "src/index.ts");
@@ -39,7 +39,7 @@ describe("Pi 0.84.2 baseline", () => {
 				"-e",
 				extension,
 				"--list-models",
-				"claude-bridge",
+				"claude-delegation",
 			], {
 				cwd: scratch,
 				env: { ...process.env, PI_CODING_AGENT_DIR: join(scratch, "agent") },
@@ -53,8 +53,8 @@ describe("Pi 0.84.2 baseline", () => {
 				`Pi failed to load the extension${result.error ? `: ${result.error.stack ?? result.error.message}` : ""}`
 					+ `\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
 			);
-			assert.match(result.stdout, /^claude-bridge\s+claude-/m);
-			assert.match(result.stdout, /claude-bridge\s+claude-haiku-4-5/);
+			assert.match(result.stdout, /^claude-delegation\s+claude-/m);
+			assert.match(result.stdout, /claude-delegation\s+claude-haiku-4-5/);
 		} finally {
 			rmSync(scratch, { recursive: true, force: true });
 		}

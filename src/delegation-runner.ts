@@ -53,7 +53,7 @@ const defaultQueryFactory: DelegationQueryFactory = (params) => query(params) as
  * Own one Claude-native Agent SDK query lifecycle.
  *
  * Provider QueryContext, MCP result routing, and Pi session synchronization do
- * not belong here. Blocking AskClaude uses this now; background jobs can reuse
+ * not belong here. Blocking DelegateToClaude uses this now; background jobs can reuse
  * the same lifecycle later.
  */
 export async function runDelegation(input: DelegationRunnerInput): Promise<DelegationRunResult> {

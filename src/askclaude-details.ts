@@ -1,11 +1,11 @@
-// Extraction and view-model helpers for AskClaude records in the Claude
+// Extraction and view-model helpers for DelegateToClaude records in the Claude
 // Sessions overlay.
 //
 // Everything here is pure over already-persisted session-branch entries or the
 // single in-memory live call slot. The overlay component
 // (claude-sessions-overlay.ts) owns keyboard/scroll state; the unified view
 // model (claude-sessions.ts) merges these records with background jobs. This
-// module owns what an AskClaude call record is and which lines it renders to,
+// module owns what an DelegateToClaude call record is and which lines it renders to,
 // and its section renderer is reused for background records. Header metadata
 // comes exclusively from the Claude
 // delegation record — a missing value renders as "unavailable" rather than
@@ -23,7 +23,7 @@ import {
 } from "./askclaude-ui.js";
 import { managedPolicyLabels } from "./query-policy.js";
 
-// "abandoned" never derives from an AskClaude call; the unified Claude
+// "abandoned" never derives from an DelegateToClaude call; the unified Claude
 // Sessions view model (claude-sessions.ts) maps background jobs whose Claude
 // Code process did not confirm termination onto the same status vocabulary.
 export type AskClaudeCallStatus = "running" | "completed" | "failed" | "cancelled" | "abandoned" | "unresolved";
@@ -39,7 +39,7 @@ export interface AskClaudeCallRecord {
 	status: AskClaudeCallStatus;
 	/** True when this record comes from the in-memory live slot, not the session branch. */
 	live?: boolean;
-	/** Set for foreground SpawnClaudeAgent calls; absent on AskClaude compatibility calls. */
+	/** Set for foreground SpawnClaudeAgent calls; absent on DelegateToClaude compatibility calls. */
 	origin?: "spawn-foreground";
 	/** SpawnClaudeAgent profile of a foreground call, for labels only. */
 	profile?: string;
@@ -85,7 +85,7 @@ function deriveCallStatus(details: AskClaudeResultDetails | undefined, isError: 
 
 /**
  * Read foreground Claude call/result pairs from real session-branch entries:
- * AskClaude compatibility calls plus, when `spawnToolName` is given, foreground
+ * DelegateToClaude compatibility calls plus, when `spawnToolName` is given, foreground
  * SpawnClaudeAgent calls (persisted arguments carry `execution: "foreground"`;
  * background spawns are represented by their job records instead).
  *
@@ -233,10 +233,10 @@ export function buildOverlayHeaderLines(
 	const lines: string[] = [];
 
 	// Foreground SpawnClaudeAgent calls share this record shape but must not be
-	// labelled as AskClaude compatibility calls.
+	// labelled as DelegateToClaude compatibility calls.
 	const title = record.origin === "spawn-foreground"
 		? `SpawnClaudeAgent ${record.profile ?? "agent"} (foreground)`
-		: "AskClaude call";
+		: "DelegateToClaude call";
 	lines.push(
 		theme.fg(status.color, `${status.icon} ${theme.bold(title)}`) +
 		theme.fg("muted", ` · record ${position.index + 1}/${position.total} · ${record.status}${record.live ? " (live)" : ""}${elapsed} · ${when}`),
@@ -293,7 +293,7 @@ function toolDepth(tool: DelegationToolCall, byId: Map<string, DelegationToolCal
 }
 
 export interface OverlayBodyOptions {
-	/** Section title for the prompt section ("Prompt" for AskClaude, "Task" for background jobs). */
+	/** Section title for the prompt section ("Prompt" for DelegateToClaude, "Task" for background jobs). */
 	promptTitle?: string;
 	/** Explicit failure text (e.g. a background job record's bounded error) preferred over snapshot error derivation. */
 	failureText?: string;

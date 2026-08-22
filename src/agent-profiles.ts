@@ -8,7 +8,7 @@ export const AGENT_PROFILE_IDS = ["advisor", "explorer", "reviewer", "worker"] a
 
 /**
  * Internal role data for spawned Claude agents. The public contract selects an
- * AskClaude-compatible capability mode; `resolveAgentProfile` derives the role
+ * DelegateToClaude-compatible capability mode; `resolveAgentProfile` derives the role
  * prompt and presentation label. No profile carries its own tool list or
  * permission policy.
  */

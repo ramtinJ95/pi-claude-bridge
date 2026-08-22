@@ -42,6 +42,10 @@ export class CheckoutWriteLease {
 	}
 }
 
+// Keep the original global key across the package/runtime rename. An unsettled
+// worker launched by pi-claude-bridge must still block this package after a
+// migration reload; changing this internal coordination key would silently
+// create two independent writers in the same checkout.
 const CHECKOUT_WRITE_LEASE_STATE_KEY = Symbol.for("pi-claude-bridge.checkout-write-lease-state");
 
 export function globalCheckoutWriteLease(): CheckoutWriteLease {

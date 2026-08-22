@@ -170,7 +170,7 @@ test("tools: [] exposes no builtin tools — only what we serve over MCP", { tim
 		`CC exposed tools beyond our MCP server: ${JSON.stringify(init.tools)}`);
 });
 
-test("an explicit AskClaude read inventory exposes exactly the bounded tools", { timeout: 60_000 }, async () => {
+test("an explicit DelegateToClaude read inventory exposes exactly the bounded tools", { timeout: 60_000 }, async () => {
 	const init = await initOnly(providerOptions({
 		tools: [...ASKCLAUDE_READ_TOOLS],
 		mcpServers: undefined,

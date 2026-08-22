@@ -1,10 +1,10 @@
 // Unified Claude Sessions view model: one flat chronological list across
-// AskClaude calls and background SpawnClaudeAgent jobs for the Claude Sessions
+// DelegateToClaude calls and background SpawnClaudeAgent jobs for the Claude Sessions
 // overlay (claude-sessions-overlay.ts).
 //
 // Everything here is pure over already-persisted session-branch entries, the
-// AskClaude live slot, and the BackgroundJobManager's bounded records. No new
-// raw or unbounded data enters the overlay: AskClaude records reuse the
+// DelegateToClaude live slot, and the BackgroundJobManager's bounded records. No new
+// raw or unbounded data enters the overlay: DelegateToClaude records reuse the
 // persisted tool-call/result pairs and retained snapshots, background records
 // reuse the bounded `claude-background-job` completion entries (validated by
 // the same guard the transcript renderer uses) or the manager's retained
@@ -33,7 +33,7 @@ import { managedPolicyLabels } from "./query-policy.js";
 
 export interface AskClaudeSessionRecord {
 	kind: "askclaude";
-	/** Stable id, namespaced so AskClaude and background records never collide. */
+	/** Stable id, namespaced so DelegateToClaude and background records never collide. */
 	id: string;
 	/** Normalized start timestamp in epoch ms, when known. */
 	startMs?: number;
@@ -144,11 +144,11 @@ export function mergeBackgroundJobRecords(
 }
 
 /**
- * One flat chronological list across both kinds. AskClaude ISO timestamps and
+ * One flat chronological list across both kinds. DelegateToClaude ISO timestamps and
  * background epoch timestamps are already normalized to epoch ms; records with
  * no timestamp inherit their predecessor's within the same source list, so the
  * deterministic branch order is the fallback (stable sort keeps ties in
- * concatenation order: AskClaude before background).
+ * concatenation order: DelegateToClaude before background).
  */
 export function mergeClaudeSessionRecords(
 	calls: readonly AskClaudeCallRecord[],
@@ -199,11 +199,11 @@ export function requestedOverlayFocus(records: readonly ClaudeSessionRecord[], r
 }
 
 /**
- * `/askclaude-details [n]` compatibility: `n` counts actual AskClaude
+ * `/askclaude-details [n]` compatibility: `n` counts actual DelegateToClaude
  * compatibility calls only — not foreground SpawnClaudeAgent calls or
  * background jobs — preserving the command's original numbering, and maps to
- * the merged record. Without `n`, focus the latest AskClaude record.
- * `index: -1` means no AskClaude record exists, so the compatibility command
+ * the merged record. Without `n`, focus the latest DelegateToClaude record.
+ * `index: -1` means no DelegateToClaude record exists, so the compatibility command
  * can preserve its old honest no-calls response instead of unexpectedly
  * opening on another record kind.
  */
@@ -294,7 +294,7 @@ function backgroundHeaderLines(
 	return lines;
 }
 
-/** Shape a background record as the same call-record body input AskClaude uses. */
+/** Shape a background record as the same call-record body input DelegateToClaude uses. */
 function backgroundCallRecord(record: BackgroundSessionRecord): AskClaudeCallRecord | undefined {
 	const data = record.data;
 	if (!data) return undefined;

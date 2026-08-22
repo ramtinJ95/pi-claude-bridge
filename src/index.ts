@@ -71,11 +71,11 @@ const newAssistantMessageEventStream: () => AssistantMessageEventStream =
 		: () => new _piAi.AssistantMessageEventStream();
 
 // --- Debug logging ---
-// CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-bridge.log
+// CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-delegation.log
 
 const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === "1";
-const DEBUG_LOG_PATH = process.env.CLAUDE_BRIDGE_DEBUG_PATH || join(homedir(), ".pi", "agent", "claude-bridge.log");
-const DIAG_LOG_PATH = join(homedir(), ".pi", "agent", "claude-bridge-diag.log");
+const DEBUG_LOG_PATH = process.env.CLAUDE_BRIDGE_DEBUG_PATH || join(homedir(), ".pi", "agent", "claude-delegation.log");
+const DIAG_LOG_PATH = join(homedir(), ".pi", "agent", "claude-delegation-diag.log");
 
 // CLAUDE_BRIDGE_RECORD_STREAM=<path> appends every SDK message consumeQuery sees,
 // one JSON object per line. Used by tests/lib/record-sdk-streams.mjs to capture
@@ -83,7 +83,7 @@ const DIAG_LOG_PATH = join(homedir(), ".pi", "agent", "claude-bridge-diag.log");
 // emitted rather than ones we imagined.
 const RECORD_STREAM_PATH = process.env.CLAUDE_BRIDGE_RECORD_STREAM;
 
-// Applied to every Claude Code subprocess the bridge spawns — provider, AskClaude
+// Applied to every Claude Code subprocess the bridge spawns — provider, DelegateToClaude
 // and the compact summary. One place, so a guard is added once rather than three
 // times, and so a missing one is visible.
 //
@@ -184,7 +184,7 @@ function diagDump(label: string, data: Record<string, unknown>) {
 //
 // On session_shutdown (including /reload), clearSession() resets this so a fresh
 // registration can occur for the next session.
-const ACTIVE_STREAM_SIMPLE_KEY = Symbol.for("claude-bridge:activeStreamSimple");
+const ACTIVE_STREAM_SIMPLE_KEY = Symbol.for("claude-delegation:activeStreamSimple");
 
 // Pi >=0.84.2 requires custom streamSimple providers to support request and
 // response lifecycle hooks. The Agent SDK exposes neither the final wire
@@ -601,7 +601,7 @@ function verifyWrittenSession(
 		piUI?.notify(
 			`Session file issue: ${msg}\n` +
 			`cwd=${cwd} realpath=${safeRealpath(cwd)} CLAUDE_CONFIG_DIR=${process.env.CLAUDE_CONFIG_DIR ?? "(unset)"}\n` +
-			`Please copy and paste this message into a new issue at https://github.com/elidickinson/pi-claude-bridge/issues/new` +
+			`Please copy and paste this message into a new issue at https://github.com/ramtinJ95/pi-claude-delegation/issues/new` +
 			(DEBUG ? ` and attach ${DEBUG_LOG_PATH}` : ` (rerun with CLAUDE_BRIDGE_DEBUG=1 to capture a debug log)`),
 			"warning",
 		);
@@ -690,7 +690,7 @@ function syncSharedSession(
 	// cursor, so it lands here, gets a fresh session, and the ephemeral session it
 	// captures is deleted once its query completes (see preserveSharedSession in
 	// the completion handler). Remove this branch and a subagent resumes — then
-	// overwrites — the parent's session. The non-isolated AskClaude path reaches it
+	// overwrites — the parent's session. The non-isolated DelegateToClaude path reaches it
 	// the same way.
 	//
 	// It is NOT, despite an earlier comment here, the isolated compact-summary
@@ -782,15 +782,15 @@ export const __test = {
 	executeForegroundDelegation,
 };
 
-// --- AskClaude result shaping ---
+// --- DelegateToClaude result shaping ---
 
 /**
- * Promote AskClaude's own failure flag to pi's `toolResult.isError`.
+ * Promote DelegateToClaude's own failure flag to pi's `toolResult.isError`.
  *
  * pi's AgentToolResult carries no isError field: a tool can only mark failure by
  * throwing, and a throw replaces the result with a bare message, discarding the
  * details the renderer needs and the partial answer a cancelled run collected.
- * AskClaude records failure in its details instead, and the `tool_result` hook
+ * DelegateToClaude records failure in its details instead, and the `tool_result` hook
  * feeds this decision back so the model sees an error result.
  */
 function askClaudeResultIsError(
@@ -930,7 +930,7 @@ let piMode: ExtensionContext["mode"] | null = null;
 const activeQueryContexts = new Set<QueryContext>();
 
 // Defaults that silently cost the user something (no Opus 1M on Max, no
-// AskClaude tool) are announced once. Deferred to the first bridge query rather
+// DelegateToClaude tool) are announced once. Deferred to the first bridge query rather
 // than session_start: the notice persists a flag to the global config, and
 // firing it on startup would write that file for every pi session that merely
 // has this extension installed. One message, because consecutive info notifies
@@ -946,7 +946,7 @@ function showStartupNoticeOnce(): void {
 	const path = markStartupNoticeShown();
 	// pi wraps the whole notify string in the theme's dim foreground; the inner reset
 	// drops back to the terminal default rather than dim, which is fine here.
-	const title = `\x1b[33mWelcome to pi-claude-bridge\x1b[39m — settings live in ${path}`;
+	const title = `\x1b[33mWelcome to pi-claude-delegation\x1b[39m — settings live in ${path}`;
 	const bullets = [...notices, "This message only appears once. See README.md for more."].map((n) => `• ${n}`);
 	piUI?.notify([title, ...bullets, "─".repeat(64)].join("\n"), "info");
 }
@@ -1899,7 +1899,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	return stream;
 }
 
-// --- AskClaude: prompt and wait ---
+// --- DelegateToClaude: prompt and wait ---
 
 // One source for the delegation default so the query and the model/permission
 // metadata rendered beside it cannot disagree about which model was requested.
@@ -1950,7 +1950,7 @@ async function runAskClaudeDelegation(
 		}
 	}
 
-	// AskClaude uses Claude Code's native Read tool rather than Pi's MCP bridge.
+	// DelegateToClaude uses Claude Code's native Read tool rather than Pi's MCP bridge.
 	// Same resolver as the provider path: a prompt neither recorded nor derivable
 	// throws here too, rather than silently sending Claude Code no skills.
 	//
@@ -1989,7 +1989,7 @@ async function runAskClaudeDelegation(
 		? { ...queryInputs, isolated: true }
 		: { ...queryInputs, isolated: false, resumeSessionId });
 
-	debug("askClaude:",
+	debug("delegation:",
 		`mode=${mode} model=${modelId} cliModel=${cliModel} effort=${effort ?? "default"}`,
 		`permission=${resolved.policy.requestedPermissionMode} isolated=${isolated} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
 		`skills=${Boolean(skillsBlock)} promptLen=${prompt.length}`);
@@ -2004,21 +2004,21 @@ async function runAskClaudeDelegation(
 		queryFactory: options?.queryFactory,
 	});
 	if (result.permission) {
-		debug("askClaude: permission mode",
+		debug("delegation: permission mode",
 			`requested=${result.permission.requested} effective=${result.permission.effective}`,
 			`overridden=${result.permission.overridden}`,
 			`managed=${managedPolicyLabels(result.managedPolicy).join(",") || "not-observed"}`);
 	}
 	for (const denial of result.permissionDenials) {
-		debug("askClaude: permission denied",
+		debug("delegation: permission denied",
 			`tool=${denial.toolName} reasonType=${denial.reasonType ?? "unknown"}`,
 			denial.reason ?? denial.message);
 	}
 	if (result.snapshot.usage) {
 		const usage = result.snapshot.usage;
-		debug(`askClaude: result usage: in=${usage.inputTokens} out=${usage.outputTokens} cacheRead=${usage.cacheReadInputTokens} cacheWrite=${usage.cacheCreationInputTokens} turns=${usage.turns}`);
+		debug(`delegation: result usage: in=${usage.inputTokens} out=${usage.outputTokens} cacheRead=${usage.cacheReadInputTokens} cacheWrite=${usage.cacheCreationInputTokens} turns=${usage.turns}`);
 	}
-	debug("askClaude: done",
+	debug("delegation: done",
 		`stopReason=${result.stopReason} resultSubtype=${result.snapshot.resultSubtype ?? "none"}`,
 		`sdkMessages=${result.messageCount} responseLen=${result.responseText.length}`,
 		`toolCalls=${result.snapshot.tools.length}`);
@@ -2057,7 +2057,7 @@ interface ForegroundDelegationInput {
 }
 
 /**
- * The one foreground execution path: blocking AskClaude calls and foreground
+ * The one foreground execution path: blocking DelegateToClaude calls and foreground
  * SpawnClaudeAgent calls both run through here, so there is a single
  * synchronous delegation runner, retained-snapshot/live-update pipeline, live
  * overlay slot, finalization, and error-promotion contract. Callers differ only
@@ -2215,9 +2215,9 @@ function spawnClaudeAgentResultIsError(
 /**
  * Run one background job through the shared delegation runner. Always a fresh
  * isolated Claude session; `mode` selects the same none/read/full capability
- * inventory AskClaude uses. The derived profile contributes only a role prompt
+ * inventory DelegateToClaude uses. The derived profile contributes only a role prompt
  * and presentation label; permission policy comes from the same configured
- * AskClaude delegation settings — never a hard-coded bypass.
+ * DelegateToClaude delegation settings — never a hard-coded bypass.
  */
 function runBackgroundJobDelegation(input: {
 	prompt: string;
@@ -2289,17 +2289,17 @@ interface SpawnForegroundRun {
 	signal: AbortSignal;
 	onUpdate?: (update: ForegroundDelegationResult) => void;
 	systemPrompt?: string;
-	/** Pi branch messages when isolated=false; resumed exactly like AskClaude shared mode. */
+	/** Pi branch messages when isolated=false; resumed exactly like DelegateToClaude shared mode. */
 	context?: Context["messages"];
 }
 
 /** Injected effects for `registerSpawnClaudeAgent` — the seam unit tests replace all of them. */
 interface SpawnClaudeAgentDeps {
-	/** SpawnClaudeAgent shares AskClaude's opt-in; nothing registers when it is off. */
+	/** SpawnClaudeAgent shares DelegateToClaude's opt-in; nothing registers when it is off. */
 	enabled: boolean;
 	/**
 	 * Whether full capability is offered. Wired from the
-	 * AskClaude contract's allowFullMode lockout so a configuration that forbids
+	 * DelegateToClaude contract's allowFullMode lockout so a configuration that forbids
 	 * full mode cannot be bypassed through SpawnClaudeAgent.
 	 */
 	allowFull: boolean;
@@ -2352,7 +2352,7 @@ function renderSpawnBackgroundResult(
  * Both execution modes are callers of the shared delegation runner. A
  * background job returns promptly with a job ID and never enters foreground
  * finalization or provider QueryContext; a foreground call blocks and returns
- * its bounded result through the same foreground implementation AskClaude uses.
+ * its bounded result through the same foreground implementation DelegateToClaude uses.
  */
 function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">, deps: SpawnClaudeAgentDeps): void {
 	if (!deps.enabled) return;
@@ -2389,8 +2389,8 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 			base: Type.Optional(Type.String({ description: "Optional git ref for branch/PR review. The captured diff spans its merge base with HEAD through the launch-time working tree." })),
 		}, { description: 'Optional code-review specialization. Valid only with mode="read". Omit base to review staged, unstaged, and untracked changes against HEAD.' })),
 		user_requested: Type.Optional(Type.Boolean({ description: 'Full mode only: must be true, and may be set only when the user explicitly asked to delegate implementation to Claude. Calls with mode="full" reject without this assertion.' })),
-		execution: Type.Optional(StringEnum(["foreground", "background"] as const, { description: '"background" (default): returns immediately with a job ID and delivers the bounded result as a message on a later turn. "foreground": blocks this tool call until the agent finishes and returns its bounded result directly, with live progress like AskClaude.' })),
-		isolated: Type.Optional(Type.Boolean({ description: 'Foreground only. When true (default), the agent runs in a fresh Claude session without Pi conversation history. When false, it sees the Pi conversation history (shared session, like AskClaude). Background jobs are always fresh and isolated: execution="background" with isolated=false is rejected.' })),
+		execution: Type.Optional(StringEnum(["foreground", "background"] as const, { description: '"background" (default): returns immediately with a job ID and delivers the bounded result as a message on a later turn. "foreground": blocks this tool call until the agent finishes and returns its bounded result directly, with live progress like DelegateToClaude.' })),
+		isolated: Type.Optional(Type.Boolean({ description: 'Foreground only. When true (default), the agent runs in a fresh Claude session without Pi conversation history. When false, it sees the Pi conversation history (shared session, like DelegateToClaude). Background jobs are always fresh and isolated: execution="background" with isolated=false is rejected.' })),
 		model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
 		thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
 	});
@@ -2422,7 +2422,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 			return new Text(text, 0, 0);
 		},
 		renderResult(result, options, theme, context) {
-			// Foreground calls carry the AskClaude-shaped details (marked with
+			// Foreground calls carry the DelegateToClaude-shaped details (marked with
 			// origin) and reuse the same rich renderer; background results keep
 			// Pi's plain default-style rendering.
 			const details = result.details as AskClaudeResultDetails | SpawnClaudeAgentResultDetails | undefined;
@@ -2453,9 +2453,9 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 				details: { error: true, ...(mode ? { mode } : {}), ...(profile ? { profile: profile.id } : {}), requestedModel, thinking: params.thinking },
 			});
 
-			if (ctx.model?.baseUrl === "claude-bridge") {
-				debug("spawnClaudeAgent: blocked circular delegation (active provider is claude-bridge)");
-				return spawnError("SpawnClaudeAgent cannot be used when the active provider is claude-bridge — you're already running through Claude Code.");
+			if (ctx.model?.baseUrl === "claude-delegation") {
+				debug("spawnClaudeAgent: blocked circular delegation (active provider is claude-delegation)");
+				return spawnError("SpawnClaudeAgent cannot be used when the active provider is claude-delegation — you're already running through Claude Code.");
 			}
 			if (!mode) {
 				return spawnError(`Unknown SpawnClaudeAgent capability mode: ${typeof rawMode === "string" ? rawMode : String(rawMode)}.`);
@@ -2476,7 +2476,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 			// Schema-level gating already hides full mode; this keeps a
 			// restored or hand-written call from bypassing the allowFullMode lockout.
 			if (mode === "full" && !deps.allowFull) {
-				return spawnError('SpawnClaudeAgent mode="full" is disabled: askClaude.allowFullMode is false in this configuration.');
+				return spawnError('SpawnClaudeAgent mode="full" is disabled: delegation.allowFullMode is false in this configuration.');
 			}
 			if (mode === "full" && params.user_requested !== true) {
 				return spawnError('SpawnClaudeAgent mode="full" requires user_requested=true, and that assertion may be supplied only when the user explicitly asked to delegate implementation to Claude.');
@@ -2534,7 +2534,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 
 				if (execution === "foreground") {
 					// Foreground blocks this tool call and returns the bounded result
-					// through the same implementation as AskClaude: same runner, live
+					// through the same implementation as DelegateToClaude: same runner, live
 					// updates, retained snapshot, overlay slot, and error semantics.
 					// Pi is blocked while it runs, so a foreground worker is naturally
 					// the only writer of the checkout.
@@ -2622,7 +2622,7 @@ function registerSpawnClaudeAgent(pi: Pick<ExtensionAPI, "registerTool" | "on">,
 const PREVIEW_MAX_CHARS = 1000;
 const PREVIEW_MAX_LINES = 6;
 
-let askClaudeToolName = "AskClaude";
+let askClaudeToolName = "DelegateToClaude";
 
 export default function (pi: ExtensionAPI) {
 	// Disable non-essential Claude Code traffic (update checks, MCP registry, telemetry)
@@ -2650,7 +2650,7 @@ export default function (pi: ExtensionAPI) {
 
 	if (!config.startupNoticeShown) {
 		if (config.provider?.plan === undefined) pendingNotices.push('Are you using a Max plan? You need to set provider.plan to "max" to unlock 1M context in Opus.');
-		if (config.askClaude?.enabled === undefined) pendingNotices.push("The AskClaude tool is opt-in only. Set askClaude.enabled to use it.");
+		if (config.delegation?.enabled === undefined) pendingNotices.push("Claude delegation tools are opt-in only. Set delegation.enabled to use them.");
 	}
 
 	// Reset shared session on pi session lifecycle events
@@ -2658,7 +2658,7 @@ export default function (pi: ExtensionAPI) {
 		debug(`${event}: clearing session ${sharedSession?.sessionId?.slice(0, 8) ?? "none"}`);
 		sharedSession = null;
 		shownProviderPermissionOverrides.clear();
-		// A live AskClaude record from a previous session branch must not surface
+		// A live DelegateToClaude record from a previous session branch must not surface
 		// in the details overlay of the next one.
 		clearLiveAskClaudeCall();
 
@@ -2697,7 +2697,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
-		if (ctx.model?.baseUrl !== "claude-bridge") return undefined;
+		if (ctx.model?.baseUrl !== "claude-delegation") return undefined;
 		debug(
 			`session_before_compact: takeover reason=${event.reason} willRetry=${event.willRetry} ` +
 			`isSplitTurn=${event.preparation.isSplitTurn} messages=${event.preparation.messagesToSummarize.length} ` +
@@ -2746,7 +2746,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_tree", () => {
 		markRebuild("session_tree");
 		// Rewind, fork-at-point, and branch switching can remove the most recent
-		// AskClaude call from the active branch. Do not merge its stale live slot
+		// DelegateToClaude call from the active branch. Do not merge its stale live slot
 		// back into the overlay after navigation.
 		clearLiveAskClaudeCall();
 	});
@@ -2760,7 +2760,7 @@ export default function (pi: ExtensionAPI) {
 	// Take it over the way compaction is taken over: the summary runs as its own
 	// Claude Code subprocess, never touching the live session or the resolver.
 	pi.on("session_before_tree", async (event, ctx) => {
-		if (ctx.model?.baseUrl !== "claude-bridge") return undefined;
+		if (ctx.model?.baseUrl !== "claude-delegation") return undefined;
 		const { entriesToSummarize, userWantsSummary, customInstructions, replaceInstructions } = event.preparation;
 		if (!userWantsSummary || entriesToSummarize.length === 0) return undefined;
 		debug(`session_before_tree: takeover entries=${entriesToSummarize.length} target=${event.preparation.targetId.slice(0, 8)}`);
@@ -2795,28 +2795,28 @@ export default function (pi: ExtensionAPI) {
 		// First instance: store our streamSimple and register.
 		g[ACTIVE_STREAM_SIMPLE_KEY] = streamClaudeAgentSdk;
 		pi.registerProvider(PROVIDER_ID, {
-			baseUrl: "claude-bridge",
+			baseUrl: "claude-delegation",
 			apiKey: "not-used",
-			api: "claude-bridge",
+			api: "claude-delegation",
 			models: registeredModels,
 			// Cast: pi-ai AssistantMessageEventStream diamond dep between pi-coding-agent and pi-agent-core
 			streamSimple: streamClaudeAgentSdk as any,
 		});
 	} else {
 		// Subsequent instance (subagent session): skip registration entirely.
-		// The subagent already has access to claude-bridge models via the shared
+		// The subagent already has access to claude-delegation models via the shared
 		// ModelRegistry from the parent's registration. Calls to those models
 		// route through the parent's streamSimple via reentrant QueryContexts.
 		debug(`provider: skipping re-registration, parent instance active (module=${moduleInstanceId})`);
 	}
 
-	// --- AskClaude tool ---
+	// --- DelegateToClaude tool ---
 
-	const askConf = config.askClaude;
+	const askConf = config.delegation;
 	const askContract = buildAskClaudeContract(askConf);
 	const { defaultMode, defaultIsolated, modeValues } = askContract;
 	const askPermissionMode = resolveDelegationPolicy(defaultMode, askConf).requestedPermissionMode;
-	askClaudeToolName = askConf?.name ?? "AskClaude";
+	askClaudeToolName = askConf?.name ?? "DelegateToClaude";
 
 	// The unified Claude Sessions overlay (Ctrl+N, /claude-details, and the
 	// /askclaude-details compatibility alias) registers under the same opt-in;
@@ -2834,12 +2834,12 @@ export default function (pi: ExtensionAPI) {
 			isolated: Type.Optional(Type.Boolean({ description: askContract.isolatedDescription })),
 		});
 		pi.registerTool<typeof askClaudeParams>({
-			name: askConf?.name ?? "AskClaude",
-			label: askConf?.label ?? "Ask Claude Code",
+			name: askConf?.name ?? "DelegateToClaude",
+			label: askConf?.label ?? "Delegate to Claude",
 			description: askContract.toolDescription,
 			parameters: askClaudeParams,
 			renderCall(args, theme) {
-				let text = theme.fg("mdLink", theme.bold("AskClaude "));
+				let text = theme.fg("mdLink", theme.bold("DelegateToClaude "));
 				const tags = askClaudeContextTags(args, askContract);
 				tags.push(`permission=${askPermissionMode}`);
 				if (args.model) tags.push(`model=${args.model}`);
@@ -2856,15 +2856,15 @@ export default function (pi: ExtensionAPI) {
 			},
 			async execute(toolCallId, params, signal, onUpdate, ctx) {
 				// Guard: circular delegation
-				if (ctx.model?.baseUrl === "claude-bridge") {
-					debug("askClaude: blocked circular delegation (active provider is claude-bridge)");
+				if (ctx.model?.baseUrl === "claude-delegation") {
+					debug("delegateToClaude: blocked circular delegation (active provider is claude-delegation)");
 					return {
-						content: [{ type: "text" as const, text: "Error: AskClaude cannot be used when the active provider is claude-bridge — you're already running through Claude Code." }],
+						content: [{ type: "text" as const, text: "Error: DelegateToClaude cannot be used when the active provider is claude-delegation — you're already running through Claude Code." }],
 						details: { error: true },
 					};
 				}
 
-				// Compatibility wrapper: AskClaude maps onto the same foreground
+				// Compatibility wrapper: DelegateToClaude maps onto the same foreground
 				// execution implementation foreground SpawnClaudeAgent uses.
 				const mode = (params.mode ?? defaultMode) as "full" | "read" | "none";
 				const isolated = params.isolated ?? defaultIsolated;
@@ -2903,22 +2903,22 @@ export default function (pi: ExtensionAPI) {
 
 	// --- SpawnClaudeAgent tool ---
 	//
-	// Registered under the same opt-in as AskClaude: these are the only two
+	// Registered under the same opt-in as DelegateToClaude: these are the only two
 	// first-class Claude tools the fork exposes. The adapter seam also wires the
 	// background jobs' session lifecycle cleanup (async, awaited by Pi 0.84.2).
 	registerSpawnClaudeAgent(pi, {
 		enabled: Boolean(askConf?.enabled),
-		// Spawn modes share AskClaude's full-capability lockout.
+		// Spawn modes share DelegateToClaude's full-capability lockout.
 		allowFull: askContract.allowFull,
 		requestedPermissionMode: askPermissionMode,
 		writeLease: checkoutWriteLease,
 		jobs: backgroundJobs,
 		captureDiff: captureReviewerDiff,
 		// Background jobs resolve permission policy from the same configured
-		// AskClaude delegation settings as the foreground path.
+		// DelegateToClaude delegation settings as the foreground path.
 		runJob: (input) => runBackgroundJobDelegation({ ...input, permissionMode: askConf?.permissionMode }),
 		// Foreground SpawnClaudeAgent calls run through the same foreground
-		// execution implementation as AskClaude — one runner, one retained
+		// execution implementation as DelegateToClaude — one runner, one retained
 		// snapshot/live-update path, one finalization — with label extras so the
 		// overlay can distinguish the call kinds.
 		runForeground: (input) => executeForegroundDelegation({

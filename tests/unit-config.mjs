@@ -9,7 +9,7 @@ import { claudeCodeSettings, loadConfig, markStartupNoticeShown } from "../src/c
 
 function withTempHome(fn) {
 	const oldHome = process.env.HOME;
-	const home = mkdtempSync(join(tmpdir(), "claude-bridge-home-"));
+	const home = mkdtempSync(join(tmpdir(), "claude-delegation-home-"));
 	try {
 		process.env.HOME = home;
 		return fn(home);
@@ -32,19 +32,19 @@ describe("claudeCodeSettings", () => {
 
 describe("loadConfig", () => {
 	it("loads project config from Pi's configured project directory", () => withTempHome(() => {
-		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		const cwd = mkdtempSync(join(tmpdir(), "claude-delegation-project-"));
 		try {
 			const configDir = join(cwd, CONFIG_DIR_NAME);
 			mkdirSync(configDir, { recursive: true });
-			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
+			writeFileSync(join(configDir, "claude-delegation.json"), JSON.stringify({
 				provider: { plan: "max" },
-				askClaude: { enabled: false },
+				delegation: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
 				provider: { plan: "max" },
-				askClaude: { enabled: false },
+				delegation: { enabled: false },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
@@ -52,25 +52,25 @@ describe("loadConfig", () => {
 	}));
 
 	it("merges project config over global config", () => withTempHome((home) => {
-		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		const cwd = mkdtempSync(join(tmpdir(), "claude-delegation-project-"));
 		try {
 			const globalDir = getAgentDir();
 			const projectDir = join(cwd, CONFIG_DIR_NAME);
 			mkdirSync(globalDir, { recursive: true });
 			mkdirSync(projectDir, { recursive: true });
-			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({
+			writeFileSync(join(globalDir, "claude-delegation.json"), JSON.stringify({
 				provider: { plan: "pro", strictMcpConfig: true, permissionMode: "default" },
-				askClaude: { enabled: true, defaultMode: "read", permissionMode: "dontAsk" },
+				delegation: { enabled: true, defaultMode: "read", permissionMode: "dontAsk" },
 			}));
-			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
+			writeFileSync(join(projectDir, "claude-delegation.json"), JSON.stringify({
 				provider: { plan: "max", autoMemoryEnabled: true, permissionMode: "auto" },
-				askClaude: { enabled: false },
+				delegation: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
 				provider: { plan: "max", strictMcpConfig: true, autoMemoryEnabled: true, permissionMode: "auto" },
-				askClaude: { enabled: false, defaultMode: "read", permissionMode: "dontAsk" },
+				delegation: { enabled: false, defaultMode: "read", permissionMode: "dontAsk" },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
@@ -78,20 +78,20 @@ describe("loadConfig", () => {
 	}));
 
 	it("markStartupNoticeShown records today's date without dropping existing settings", () => withTempHome(() => {
-		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		const cwd = mkdtempSync(join(tmpdir(), "claude-delegation-project-"));
 		try {
 			const globalDir = getAgentDir();
 			mkdirSync(globalDir, { recursive: true });
-			const path = join(globalDir, "claude-bridge.json");
+			const path = join(globalDir, "claude-delegation.json");
 			writeFileSync(path, JSON.stringify({
-				askClaude: { enabled: false },
+				delegation: { enabled: false },
 				provider: { strictMcpConfig: false },
 			}));
 
 			assert.equal(markStartupNoticeShown(), path);
 			const written = JSON.parse(readFileSync(path, "utf-8"));
 			assert.match(written.startupNoticeShown, /^\d{4}-\d{2}-\d{2}$/);
-			assert.deepEqual(written.askClaude, { enabled: false });
+			assert.deepEqual(written.delegation, { enabled: false });
 			assert.deepEqual(written.provider, { strictMcpConfig: false });
 			assert.equal(loadConfig(cwd).startupNoticeShown, written.startupNoticeShown);
 		} finally {
@@ -102,8 +102,8 @@ describe("loadConfig", () => {
 	it("markStartupNoticeShown leaves an unparseable config untouched", () => withTempHome(() => {
 		const globalDir = getAgentDir();
 		mkdirSync(globalDir, { recursive: true });
-		const path = join(globalDir, "claude-bridge.json");
-		const malformed = '{ "askClaude": { "enabled": true }, }';
+		const path = join(globalDir, "claude-delegation.json");
+		const malformed = '{ "delegation": { "enabled": true }, }';
 		writeFileSync(path, malformed);
 
 		markStartupNoticeShown();
@@ -111,7 +111,7 @@ describe("loadConfig", () => {
 	}));
 
 	it("markStartupNoticeShown creates the config when there is none", () => withTempHome(() => {
-		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		const cwd = mkdtempSync(join(tmpdir(), "claude-delegation-project-"));
 		try {
 			assert.equal(loadConfig(cwd).startupNoticeShown, undefined);
 			markStartupNoticeShown();
@@ -122,19 +122,19 @@ describe("loadConfig", () => {
 	}));
 
 	it("resolves global config via PI_CODING_AGENT_DIR override, not hardcoded ~/.pi/agent", () => withTempHome(() => {
-		const agentDir = mkdtempSync(join(tmpdir(), "claude-bridge-agent-"));
-		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		const agentDir = mkdtempSync(join(tmpdir(), "claude-delegation-agent-"));
+		const cwd = mkdtempSync(join(tmpdir(), "claude-delegation-project-"));
 		const oldEnv = process.env.PI_CODING_AGENT_DIR;
 		try {
 			process.env.PI_CODING_AGENT_DIR = agentDir;
-			writeFileSync(join(agentDir, "claude-bridge.json"), JSON.stringify({
+			writeFileSync(join(agentDir, "claude-delegation.json"), JSON.stringify({
 				provider: { plan: "max" },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				startupNoticeShown: undefined,
 				provider: { plan: "max" },
-				askClaude: {},
+				delegation: {},
 			});
 		} finally {
 			if (oldEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;

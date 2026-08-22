@@ -123,7 +123,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking with signature preserved", () => {
 		const msgs = [
-			{ role: "assistant", provider: "claude-bridge", content: [
+			{ role: "assistant", provider: "claude-delegation", content: [
 				{ type: "thinking", thinking: "reasoning...", thinkingSignature: "sig123" },
 				{ type: "text", text: "answer" },
 			]},
@@ -132,6 +132,16 @@ describe("thinking block filtering", () => {
 		assert.equal(result[0].content.length, 2);
 		assert.equal(result[0].content[0].type, "thinking");
 		assert.equal(result[0].content[0].signature, "sig123");
+	});
+
+	it("preserves signed thinking from the legacy provider in resumed sessions", () => {
+		const result = convert([{
+			role: "assistant",
+			provider: "claude-bridge",
+			content: [{ type: "thinking", thinking: "legacy reasoning", thinkingSignature: "sig-legacy" }],
+		}]);
+		assert.equal(result[0].content[0].type, "thinking");
+		assert.equal(result[0].content[0].signature, "sig-legacy");
 	});
 
 	// A signature minted by another provider isn't ours to replay into Claude
@@ -149,7 +159,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking WITHOUT signature → dropped", () => {
 		const msgs = [
-			{ role: "assistant", provider: "claude-bridge", content: [
+			{ role: "assistant", provider: "claude-delegation", content: [
 				{ type: "thinking", thinking: "no sig" },
 				{ type: "text", text: "answer" },
 			]},
@@ -264,18 +274,18 @@ describe("message structure", () => {
 	// With a tool map the query runs `tools: []`, so no name in the transcript may
 	// look like a Claude Code builtin — that is what makes the model call one it
 	// cannot call. A tool missing from the map is one pi ran and we no longer
-	// serve (AskClaude is excluded on purpose), not a builtin.
+	// serve (DelegateToClaude is excluded on purpose), not a builtin.
 	it("tool name mapping: unserved pi tools keep the MCP namespace", () => {
 		const served = new Map([["read", "mcp__custom-tools__read"]]);
 		const msgs = [
 			{ role: "assistant", content: [
 				{ type: "toolCall", id: "a", name: "read", arguments: {} },
 				{ type: "toolCall", id: "b", name: "bash", arguments: {} },
-				{ type: "toolCall", id: "c", name: "AskClaude", arguments: {} },
+				{ type: "toolCall", id: "c", name: "DelegateToClaude", arguments: {} },
 			]},
 		];
 		assert.deepEqual(convert(msgs, served)[0].content.map((b) => b.name),
-			["mcp__custom-tools__read", "mcp__custom-tools__bash", "mcp__custom-tools__AskClaude"]);
+			["mcp__custom-tools__read", "mcp__custom-tools__bash", "mcp__custom-tools__DelegateToClaude"]);
 	});
 
 	it("tool name mapping: an SDK name in pi history is a double mapping, not a tool", () => {
@@ -485,7 +495,7 @@ describe("dropped-content accounting", () => {
 				{ type: "text", text: "the answer" },
 			]},
 			{ role: "assistant", content: [] },
-			{ role: "assistant", provider: "claude-bridge", content: [
+			{ role: "assistant", provider: "claude-delegation", content: [
 				{ type: "thinking", thinking: "mine", thinkingSignature: "sig" },
 			]},
 		]);

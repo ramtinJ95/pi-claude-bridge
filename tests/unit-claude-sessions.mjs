@@ -43,13 +43,13 @@ function messageEntry(message, timestamp) {
 
 function callEntry(id, prompt, timestamp) {
 	return messageEntry(
-		{ role: "assistant", content: [{ type: "toolCall", id, name: "AskClaude", arguments: { prompt, mode: "read" } }] },
+		{ role: "assistant", content: [{ type: "toolCall", id, name: "DelegateToClaude", arguments: { prompt, mode: "read" } }] },
 		timestamp,
 	);
 }
 
 function resultEntry(id, details) {
-	return messageEntry({ role: "toolResult", toolCallId: id, toolName: "AskClaude", content: [{ type: "text", text: "answer" }], isError: false, details });
+	return messageEntry({ role: "toolResult", toolCallId: id, toolName: "DelegateToClaude", content: [{ type: "text", text: "answer" }], isError: false, details });
 }
 
 function askDetails(overrides = {}) {
@@ -170,7 +170,7 @@ function mixedBranch() {
 
 function loadMixed(entries, jobs = jobsStub()) {
 	return () => mergeClaudeSessionRecords(
-		mergeLiveCall(extractAskClaudeCalls(entries, "AskClaude"), getLiveAskClaudeCall()),
+		mergeLiveCall(extractAskClaudeCalls(entries, "DelegateToClaude"), getLiveAskClaudeCall()),
 		mergeBackgroundJobRecords(extractBackgroundJobRecords(entries), jobs.list()),
 	);
 }
@@ -261,7 +261,7 @@ describe("background record merge/dedup", () => {
 });
 
 describe("chronological merge and focus rules", () => {
-	it("orders AskClaude ISO timestamps and background epoch timestamps in one flat list", () => {
+	it("orders DelegateToClaude ISO timestamps and background epoch timestamps in one flat list", () => {
 		const records = loadMixed(mixedBranch())();
 		assert.deepEqual(records.map((record) => record.kind), ["askclaude", "background", "askclaude"]);
 		assert.deepEqual(records.map((record) => record.id), [
@@ -275,7 +275,7 @@ describe("chronological merge and focus rules", () => {
 		const calls = extractAskClaudeCalls([
 			callEntry("call-1", "first", "2026-08-20T09:00:00.000Z"),
 			callEntry("call-2", "no timestamp", undefined),
-		], "AskClaude");
+		], "DelegateToClaude");
 		const background = extractBackgroundJobRecords([jobEntry(completionData())]);
 		const records = mergeClaudeSessionRecords(calls, background);
 		// call-2 has no timestamp: it inherits call-1's position and stays before
@@ -303,15 +303,15 @@ describe("chronological merge and focus rules", () => {
 		assert.deepEqual(requestedOverlayFocus(records, 99), { index: 2, pinned: false });
 	});
 
-	it("resolves /askclaude-details numbering among AskClaude calls only and maps to the merged list", () => {
+	it("resolves /askclaude-details numbering among DelegateToClaude calls only and maps to the merged list", () => {
 		const records = loadMixed(mixedBranch())();
-		assert.equal(askClaudeOverlayFocus(records).index, 2, "default focuses the latest AskClaude record");
+		assert.equal(askClaudeOverlayFocus(records).index, 2, "default focuses the latest DelegateToClaude record");
 		assert.deepEqual(askClaudeOverlayFocus(records, 1), { index: 0, pinned: true }, "call #1 maps around the background record");
 		assert.equal(askClaudeOverlayFocus(records, 2).index, 2, "call #2 is merged record 3");
-		assert.equal(askClaudeOverlayFocus(records, 99).index, 2, "clamped to the last AskClaude call");
+		assert.equal(askClaudeOverlayFocus(records, 99).index, 2, "clamped to the last DelegateToClaude call");
 
 		const backgroundOnly = loadMixed([jobEntry(completionData())])();
-		assert.deepEqual(askClaudeOverlayFocus(backgroundOnly), { index: -1, pinned: false }, "the compatibility command reports no AskClaude calls");
+		assert.deepEqual(askClaudeOverlayFocus(backgroundOnly), { index: -1, pinned: false }, "the compatibility command reports no DelegateToClaude calls");
 	});
 
 	it("focuses /claude-jobs on the running job, else the latest background job, else nothing", () => {
@@ -438,7 +438,7 @@ describe("unified overlay with live background jobs", () => {
 		assert.match(rendered, /model: claude-opus-runtime/);
 		assert.match(rendered, /partial narration/);
 
-		// A newer AskClaude live call appends a record but must not steal the
+		// A newer DelegateToClaude live call appends a record but must not steal the
 		// pinned running-job selection.
 		updateLiveAskClaudeCall({ toolCallId: "call-9", startedAt: T("10:45:00"), prompt: "live ask", details: { prompt: "live ask" } });
 		rendered = overlay.render(100).join("\n");
@@ -510,11 +510,11 @@ describe("unified overlay with live background jobs", () => {
 
 	it("navigates one flat list across both kinds", () => {
 		const overlay = new ClaudeSessionsOverlay(stubTui(), theme, kb, () => {}, loadMixed(mixedBranch()));
-		assert.match(overlay.render(100).join("\n"), /record 3\/3.*AskClaude call|AskClaude call.*record 3\/3/);
+		assert.match(overlay.render(100).join("\n"), /record 3\/3.*DelegateToClaude call|DelegateToClaude call.*record 3\/3/);
 		overlay.handleInput("\x1b[D"); // left
 		assert.match(overlay.render(100).join("\n"), /Claude reviewer background job/);
 		overlay.handleInput("p");
-		assert.match(overlay.render(100).join("\n"), /AskClaude call/);
+		assert.match(overlay.render(100).join("\n"), /DelegateToClaude call/);
 		overlay.handleInput("n");
 		overlay.handleInput("\x1b[C");
 		assert.match(overlay.render(100).join("\n"), /record 3\/3/);
@@ -539,7 +539,7 @@ describe("unified overlay registration", () => {
 		const handle = registerClaudeSessionsUI({
 			registerCommand: (name, command) => commands.set(name, command),
 			registerShortcut: (key, shortcut) => shortcuts.set(key, shortcut),
-		}, { toolName: "AskClaude", jobs });
+		}, { toolName: "DelegateToClaude", jobs });
 
 		const notifications = [];
 		let active = null;
@@ -586,26 +586,26 @@ describe("unified overlay registration", () => {
 		const { commands, ctx, notifications, customCalls } = register([]);
 		await commands.get("claude-details").handler("", ctx);
 		assert.equal(customCalls(), 0);
-		assert.match(notifications[0].message, /No AskClaude calls or background Claude jobs/);
+		assert.match(notifications[0].message, /No DelegateToClaude calls or background Claude jobs/);
 	});
 
-	it("keeps /askclaude-details as an unfiltered alias with AskClaude-relative numbering", async () => {
+	it("keeps /askclaude-details as an unfiltered alias with DelegateToClaude-relative numbering", async () => {
 		const { commands, ctx, overlay } = register(mixedBranch());
 		assert.ok(commands.has("askclaude-details"));
 		assert.match(commands.get("askclaude-details").description, /Alias of \/claude-details/);
 
-		// <n> counts AskClaude calls only: call #2 is merged record 3 of 3.
+		// <n> counts DelegateToClaude calls only: call #2 is merged record 3 of 3.
 		const openedAt2 = commands.get("askclaude-details").handler("2", ctx);
 		let rendered = overlay().render(100).join("\n");
 		assert.match(rendered, /record 3\/3/);
-		assert.match(rendered, /AskClaude call/);
+		assert.match(rendered, /DelegateToClaude call/);
 		// The overlay stays unfiltered: the background record is one step left.
 		overlay().handleInput("\x1b[D");
 		assert.match(overlay().render(100).join("\n"), /Claude reviewer background job/);
 		overlay().handleInput("q");
 		await openedAt2;
 
-		// Without <n> it focuses the latest AskClaude record even when a later
+		// Without <n> it focuses the latest DelegateToClaude record even when a later
 		// background record exists.
 		const entries = [
 			callEntry("call-1", "only ask", "2026-08-20T09:00:00.000Z"),
@@ -616,7 +616,7 @@ describe("unified overlay registration", () => {
 		const opened = later.commands.get("askclaude-details").handler("", later.ctx);
 		rendered = later.overlay().render(100).join("\n");
 		assert.match(rendered, /record 1\/2/);
-		assert.match(rendered, /AskClaude call/);
+		assert.match(rendered, /DelegateToClaude call/);
 		later.overlay().handleInput("q");
 		await opened;
 	});
@@ -625,7 +625,7 @@ describe("unified overlay registration", () => {
 		const { commands, ctx, notifications, customCalls } = register([jobEntry(completionData())]);
 		await commands.get("askclaude-details").handler("", ctx);
 		assert.equal(customCalls(), 0);
-		assert.match(notifications[0].message, /No AskClaude calls in this session branch/);
+		assert.match(notifications[0].message, /No DelegateToClaude calls in this session branch/);
 	});
 
 	it("Ctrl+N toggles one owned overlay and focuses a running background job first", async () => {
@@ -697,7 +697,7 @@ describe("foreground SpawnClaudeAgent records in the unified list", () => {
 		];
 	}
 	const loadWithSpawn = () => mergeClaudeSessionRecords(
-		extractAskClaudeCalls(mixedWithSpawn(), "AskClaude", "SpawnClaudeAgent"),
+		extractAskClaudeCalls(mixedWithSpawn(), "DelegateToClaude", "SpawnClaudeAgent"),
 		[],
 	);
 
@@ -711,18 +711,18 @@ describe("foreground SpawnClaudeAgent records in the unified list", () => {
 		assert.equal(records[1].call.origin, "spawn-foreground");
 	});
 
-	it("counts only actual AskClaude compatibility calls for /askclaude-details numbering", () => {
+	it("counts only actual DelegateToClaude compatibility calls for /askclaude-details numbering", () => {
 		const records = loadWithSpawn();
-		// Latest AskClaude record is merged index 2, skipping the spawn record.
+		// Latest DelegateToClaude record is merged index 2, skipping the spawn record.
 		assert.equal(askClaudeOverlayFocus(records).index, 2);
 		assert.deepEqual(askClaudeOverlayFocus(records, 1), { index: 0, pinned: true });
 		assert.equal(askClaudeOverlayFocus(records, 2).index, 2, "call #2 skips the foreground spawn record");
 
 		const spawnOnly = mergeClaudeSessionRecords(
-			extractAskClaudeCalls([spawnForegroundEntry("spawn-1"), spawnForegroundResult("spawn-1")], "AskClaude", "SpawnClaudeAgent"),
+			extractAskClaudeCalls([spawnForegroundEntry("spawn-1"), spawnForegroundResult("spawn-1")], "DelegateToClaude", "SpawnClaudeAgent"),
 			[],
 		);
-		assert.deepEqual(askClaudeOverlayFocus(spawnOnly), { index: -1, pinned: false }, "spawn foreground calls are not AskClaude compatibility calls");
+		assert.deepEqual(askClaudeOverlayFocus(spawnOnly), { index: -1, pinned: false }, "spawn foreground calls are not DelegateToClaude compatibility calls");
 	});
 
 	it("renders the spawn record body with a Task section over the same section renderer", () => {

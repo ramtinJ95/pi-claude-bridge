@@ -39,7 +39,7 @@ const corpus = readFileSync(fileURLToPath(new URL("./fixtures/pi-history-310.jso
 // signature, and thinking from providers whose signatures we may not replay.
 const exotic = [
 	{ role: "user", content: "start" },
-	{ role: "assistant", provider: "claude-bridge", content: [
+	{ role: "assistant", provider: "claude-delegation", content: [
 		{ type: "thinking", thinking: "planning", thinkingSignature: "sigA" },
 		{ type: "text", text: "reading two files" },
 		{ type: "toolCall", id: "functions.read:0", name: "read", arguments: { path: "a" } },
@@ -56,12 +56,12 @@ const exotic = [
 		{ type: "toolCall", id: "tool call#2@x", name: "my_custom_tool", arguments: {} },
 	] },
 	{ role: "toolResult", toolCallId: "tool call#2@x", content: "", isError: true },
-	{ role: "assistant", provider: "claude-bridge", content: [{ type: "thinking", thinking: "unsigned" }] },
+	{ role: "assistant", provider: "claude-delegation", content: [{ type: "thinking", thinking: "unsigned" }] },
 	{ role: "user", content: "" },
 	{ role: "user", content: [{ type: "image", data: "IMG", mimeType: "image/jpeg" }] },
-	{ role: "assistant", provider: "claude-bridge", content: [{ type: "toolCall", id: "t9", name: "bash", arguments: { cmd: "ls" } }] },
+	{ role: "assistant", provider: "claude-delegation", content: [{ type: "toolCall", id: "t9", name: "bash", arguments: { cmd: "ls" } }] },
 	{ role: "toolResult", toolCallId: "t9", content: [{ type: "document" }] },
-	{ role: "assistant", provider: "claude-bridge", content: [{ type: "text", text: "done" }] },
+	{ role: "assistant", provider: "claude-delegation", content: [{ type: "text", text: "done" }] },
 ];
 
 describe("conversion is deterministic", () => {

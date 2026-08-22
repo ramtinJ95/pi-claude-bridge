@@ -37,7 +37,7 @@ function messageEntry(message, timestamp = "2026-08-20T10:00:00.000Z") {
 	return { type: "message", id: `id-${Math.random()}`, parentId: null, timestamp, message };
 }
 
-function callEntry(id, prompt, name = "AskClaude", timestamp) {
+function callEntry(id, prompt, name = "DelegateToClaude", timestamp) {
 	return messageEntry(
 		{ role: "assistant", content: [{ type: "text", text: "delegating" }, { type: "toolCall", id, name, arguments: { prompt, mode: "read" } }] },
 		timestamp,
@@ -45,7 +45,7 @@ function callEntry(id, prompt, name = "AskClaude", timestamp) {
 }
 
 function resultEntry(id, details, isError = false) {
-	return messageEntry({ role: "toolResult", toolCallId: id, toolName: "AskClaude", content: [{ type: "text", text: "answer" }], isError, details });
+	return messageEntry({ role: "toolResult", toolCallId: id, toolName: "DelegateToClaude", content: [{ type: "text", text: "answer" }], isError, details });
 }
 
 function completedSnapshot(overrides = {}) {
@@ -90,7 +90,7 @@ function completedDetails(overrides = {}) {
 	};
 }
 
-function branchWithCalls(name = "AskClaude") {
+function branchWithCalls(name = "DelegateToClaude") {
 	return [
 		messageEntry({ role: "user", content: "hello" }),
 		callEntry("call-1", "First prompt", name, "2026-08-20T09:00:00.000Z"),
@@ -108,7 +108,7 @@ function stubTui(rows = 30, columns = 100) {
 
 const kb = { matches: () => false };
 
-// The unified overlay consumes merged Claude-session records; these AskClaude
+// The unified overlay consumes merged Claude-session records; these DelegateToClaude
 // tests wrap the call records with no background jobs present.
 function asSessionRecords(records) {
 	return () => mergeClaudeSessionRecords(records(), []);
@@ -130,21 +130,21 @@ function makeOverlay(records, { rows = 30, columns = 100, requestedIndex, onDone
 
 beforeEach(() => clearLiveAskClaudeCall());
 
-describe("AskClaude details extraction", () => {
+describe("DelegateToClaude details extraction", () => {
 	it("pairs tool calls with results from session-branch entries, in order", () => {
-		const records = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const records = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		assert.equal(records.length, 3);
 		assert.deepEqual(records.map((record) => record.toolCallId), ["call-1", "call-2", "call-3"]);
 		assert.deepEqual(records.map((record) => record.status), ["completed", "cancelled", "unresolved"]);
 		assert.equal(records[0].timestamp, "2026-08-20T09:00:00.000Z");
 	});
 
-	it("extracts calls under a custom AskClaude tool name and ignores other tools", () => {
+	it("extracts calls under a custom DelegateToClaude tool name and ignores other tools", () => {
 		const entries = [
 			...branchWithCalls("AskExpert"),
 			messageEntry({ role: "assistant", content: [{ type: "toolCall", id: "other", name: "bash", arguments: { command: "ls" } }] }),
 		];
-		assert.equal(extractAskClaudeCalls(entries, "AskClaude").length, 0);
+		assert.equal(extractAskClaudeCalls(entries, "DelegateToClaude").length, 0);
 		const records = extractAskClaudeCalls(entries, "AskExpert");
 		assert.equal(records.length, 3);
 		assert.ok(!records.some((record) => record.toolCallId === "other"));
@@ -153,7 +153,7 @@ describe("AskClaude details extraction", () => {
 	it("recovers the full original prompt from persisted tool-call arguments", () => {
 		const longPrompt = `${"x".repeat(PROMPT_MAX_CHARS + 500)}END_OF_PROMPT`;
 		const entries = [callEntry("call-long", longPrompt), resultEntry("call-long", completedDetails())];
-		const [record] = extractAskClaudeCalls(entries, "AskClaude");
+		const [record] = extractAskClaudeCalls(entries, "DelegateToClaude");
 		assert.equal(record.prompt, longPrompt);
 
 		const body = buildOverlayBodyLines(record, theme, 200000);
@@ -164,10 +164,10 @@ describe("AskClaude details extraction", () => {
 
 	it("falls back to the retained prompt copy when tool-call arguments are missing", () => {
 		const entries = [
-			messageEntry({ role: "assistant", content: [{ type: "toolCall", id: "call-x", name: "AskClaude", arguments: {} }] }),
+			messageEntry({ role: "assistant", content: [{ type: "toolCall", id: "call-x", name: "DelegateToClaude", arguments: {} }] }),
 			resultEntry("call-x", completedDetails()),
 		];
-		const [record] = extractAskClaudeCalls(entries, "AskClaude");
+		const [record] = extractAskClaudeCalls(entries, "DelegateToClaude");
 		assert.equal(record.prompt, undefined);
 		const rendered = buildOverlayBodyLines(record, theme, 100).lines.join("\n");
 		assert.match(rendered, /retained copy — original tool-call arguments unavailable/);
@@ -179,11 +179,11 @@ describe("AskClaude details extraction", () => {
 			callEntry("call-f", "p"),
 			resultEntry("call-f", completedDetails({ error: true, snapshot: completedSnapshot({ status: "failed", error: "request overloaded" }) }), true),
 		];
-		assert.equal(extractAskClaudeCalls(entries, "AskClaude")[0].status, "failed");
+		assert.equal(extractAskClaudeCalls(entries, "DelegateToClaude")[0].status, "failed");
 	});
 });
 
-describe("AskClaude call selection", () => {
+describe("DelegateToClaude call selection", () => {
 	it("selects the latest call by default and clamps requested indexes", () => {
 		assert.equal(selectCallIndex(3), 2);
 		assert.equal(selectCallIndex(3, 2), 1);
@@ -193,7 +193,7 @@ describe("AskClaude call selection", () => {
 	});
 
 	it("navigates previous/next records with reset scroll and shows the record position", () => {
-		const records = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const records = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		const { overlay } = makeOverlay(() => records);
 		let rendered = overlay.render(100).join("\n");
 		assert.match(rendered, /record 3\/3/);
@@ -215,9 +215,9 @@ describe("AskClaude call selection", () => {
 	});
 });
 
-describe("AskClaude details header is Claude-only", () => {
+describe("DelegateToClaude details header is Claude-only", () => {
 	it("shows delegation metadata from the retained snapshot", () => {
-		const [record] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "AskClaude");
+		const [record] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "DelegateToClaude");
 		const header = buildOverlayHeaderLines(record, { index: 0, total: 1 }, theme).join("\n");
 		assert.match(header, /model: claude-opus-runtime \(requested opus\)/);
 		assert.match(header, /session: claude-session-1234/);
@@ -229,7 +229,7 @@ describe("AskClaude details header is Claude-only", () => {
 	});
 
 	it("says unavailable instead of substituting Pi session values", () => {
-		const [record] = extractAskClaudeCalls([callEntry("c", "p")], "AskClaude");
+		const [record] = extractAskClaudeCalls([callEntry("c", "p")], "DelegateToClaude");
 		const header = buildOverlayHeaderLines(record, { index: 0, total: 1 }, theme).join("\n");
 		assert.match(header, /model: unavailable/);
 		assert.match(header, /session: unavailable/);
@@ -243,9 +243,9 @@ describe("AskClaude details header is Claude-only", () => {
 	});
 });
 
-describe("AskClaude details body", () => {
+describe("DelegateToClaude details body", () => {
 	it("shows retained tools, timeline, truncation markers and omission notices verbatim", () => {
-		const [record] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "AskClaude");
+		const [record] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "DelegateToClaude");
 		const body = buildOverlayBodyLines(record, theme, 120);
 		const rendered = body.lines.join("\n");
 		assert.match(rendered, /Tools \(2 earlier omitted\)/);
@@ -259,7 +259,7 @@ describe("AskClaude details body", () => {
 	});
 
 	it("reports an unresolved call without inventing content", () => {
-		const [record] = extractAskClaudeCalls([callEntry("c", "p")], "AskClaude");
+		const [record] = extractAskClaudeCalls([callEntry("c", "p")], "DelegateToClaude");
 		const rendered = buildOverlayBodyLines(record, theme, 100).lines.join("\n");
 		assert.match(rendered, /no result recorded for this call/);
 	});
@@ -283,7 +283,7 @@ describe("AskClaude details body", () => {
 	});
 });
 
-describe("AskClaude overlay scrolling", () => {
+describe("DelegateToClaude overlay scrolling", () => {
 	it("clamps scroll positions", () => {
 		assert.equal(clampScrollTop(-5, 100, 10), 0);
 		assert.equal(clampScrollTop(50, 100, 10), 50);
@@ -293,7 +293,7 @@ describe("AskClaude overlay scrolling", () => {
 
 	it("scrolls by line, page, home, end, and jumps to sections", () => {
 		const details = completedDetails({ snapshot: completedSnapshot({ resultText: Array.from({ length: 80 }, (_, i) => `response line ${i}`).join("\n\n") }) });
-		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", details)], "AskClaude");
+		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", details)], "DelegateToClaude");
 		const { overlay } = makeOverlay(() => records, { rows: 24 });
 		overlay.render(100); // establish body width and viewport
 
@@ -330,7 +330,7 @@ describe("AskClaude overlay scrolling", () => {
 
 	it("honors the user's configured select page bindings", () => {
 		const details = completedDetails({ snapshot: completedSnapshot({ resultText: Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n\n") }) });
-		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", details)], "AskClaude");
+		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", details)], "DelegateToClaude");
 		const customKb = { matches: (data, binding) => data === "CUSTOM_PAGE_DOWN" && binding === "tui.select.pageDown" };
 		const tui = stubTui();
 		const overlay = new ClaudeSessionsOverlay(tui, theme, customKb, () => {}, asSessionRecords(() => records));
@@ -340,9 +340,9 @@ describe("AskClaude overlay scrolling", () => {
 	});
 });
 
-describe("AskClaude overlay close keys and rendering", () => {
+describe("DelegateToClaude overlay close keys and rendering", () => {
 	it("closes on escape, q, and ctrl+n", () => {
-		const records = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const records = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		for (const key of ["\x1b", "q", "\x0e"]) {
 			const { overlay, doneCount } = makeOverlay(() => records);
 			overlay.handleInput(key);
@@ -351,7 +351,7 @@ describe("AskClaude overlay close keys and rendering", () => {
 	});
 
 	it("renders a scroll-position indicator and the key map footer", () => {
-		const records = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const records = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		const { overlay } = makeOverlay(() => records);
 		const rendered = overlay.render(100).join("\n");
 		assert.match(rendered, /lines \d+-\d+\/\d+ \(\d+%\)/);
@@ -361,7 +361,7 @@ describe("AskClaude overlay close keys and rendering", () => {
 	});
 
 	it("stays within the terminal budget and width on small terminals", () => {
-		const records = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const records = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		const { overlay } = makeOverlay(() => records, { rows: 10, columns: 44 });
 		const lines = overlay.render(40);
 		assert.ok(lines.length <= 8, `rendered ${lines.length} lines for a 10-row terminal`);
@@ -372,7 +372,7 @@ describe("AskClaude overlay close keys and rendering", () => {
 	});
 });
 
-describe("AskClaude live call state", () => {
+describe("DelegateToClaude live call state", () => {
 	it("keeps a single latest-call slot and derives a running record before any snapshot", () => {
 		updateLiveAskClaudeCall({ toolCallId: "a", startedAt: 1000, prompt: "first", details: { prompt: "first" } });
 		updateLiveAskClaudeCall({ toolCallId: "b", startedAt: 2000, prompt: "second", details: { prompt: "second" } });
@@ -394,7 +394,7 @@ describe("AskClaude live call state", () => {
 	});
 
 	it("appends the live call and drops it once the branch holds the persisted result", () => {
-		const persisted = extractAskClaudeCalls([callEntry("call-1", "p1"), resultEntry("call-1", completedDetails())], "AskClaude");
+		const persisted = extractAskClaudeCalls([callEntry("call-1", "p1"), resultEntry("call-1", completedDetails())], "DelegateToClaude");
 		const live = { toolCallId: "call-2", startedAt: 1, prompt: "live prompt", details: { prompt: "live prompt" } };
 		const merged = mergeLiveCall(persisted, live);
 		assert.equal(merged.length, 2);
@@ -408,7 +408,7 @@ describe("AskClaude live call state", () => {
 		assert.equal(shadowed[0].status, "completed");
 
 		// A persisted tool call without a result yet is replaced by the live view.
-		const pending = extractAskClaudeCalls([callEntry("call-3", "branch prompt")], "AskClaude");
+		const pending = extractAskClaudeCalls([callEntry("call-3", "branch prompt")], "DelegateToClaude");
 		const enriched = mergeLiveCall(pending, { ...live, toolCallId: "call-3" });
 		assert.equal(enriched.length, 1);
 		assert.equal(enriched[0].status, "running");
@@ -417,7 +417,7 @@ describe("AskClaude live call state", () => {
 	});
 
 	it("re-renders the open overlay on live updates, follows the latest call, and unsubscribes on dispose", () => {
-		const base = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const base = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		const loadRecords = () => mergeLiveCall(base, getLiveAskClaudeCall());
 		const listenersBefore = __overlayTest.liveListenerCount();
 		const { overlay, tui } = makeOverlay(loadRecords);
@@ -436,7 +436,7 @@ describe("AskClaude live call state", () => {
 	});
 
 	it("keeps an explicitly selected earlier call pinned across live updates", () => {
-		const base = extractAskClaudeCalls(branchWithCalls(), "AskClaude");
+		const base = extractAskClaudeCalls(branchWithCalls(), "DelegateToClaude");
 		const loadRecords = () => mergeLiveCall(base, getLiveAskClaudeCall());
 		let bodyHeadings = 0;
 		const countingTheme = {
@@ -458,7 +458,7 @@ describe("AskClaude live call state", () => {
 	});
 
 	it("invalidates cached themed body lines", () => {
-		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "AskClaude");
+		const records = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "DelegateToClaude");
 		let marker = "before:";
 		const changingTheme = {
 			fg: (color, text) => color === "muted" && String(text).startsWith("──") ? `${marker}${text}` : text,
@@ -476,14 +476,14 @@ describe("AskClaude live call state", () => {
 	});
 });
 
-describe("AskClaude overlay registration", () => {
+describe("DelegateToClaude overlay registration", () => {
 	it("does not let a closing overlay clear the replacement overlay's toggle owner", async () => {
 		const commands = new Map();
 		const shortcuts = new Map();
 		registerClaudeSessionsUI({
 			registerCommand: (name, command) => commands.set(name, command),
 			registerShortcut: (key, shortcut) => shortcuts.set(key, shortcut),
-		}, { toolName: "AskClaude", jobs: { list: () => [], running: () => undefined, subscribe: () => () => {} } });
+		}, { toolName: "DelegateToClaude", jobs: { list: () => [], running: () => undefined, subscribe: () => () => {} } });
 
 		let customCalls = 0;
 		const ctx = {
@@ -527,14 +527,14 @@ function spawnResultEntry(id, details, isError = false) {
 }
 
 describe("foreground SpawnClaudeAgent extraction and labels", () => {
-	it("extracts foreground spawn calls as foreground records alongside AskClaude calls", () => {
+	it("extracts foreground spawn calls as foreground records alongside DelegateToClaude calls", () => {
 		const entries = [
-			callEntry("ask-1", "ask prompt", "AskClaude", "2026-08-20T09:00:00.000Z"),
+			callEntry("ask-1", "ask prompt", "DelegateToClaude", "2026-08-20T09:00:00.000Z"),
 			resultEntry("ask-1", completedDetails()),
 			spawnCallEntry("spawn-1", { task: "fix the bug", mode: "full", execution: "foreground" }, "2026-08-20T09:30:00.000Z"),
 			spawnResultEntry("spawn-1", completedDetails({ origin: "spawn-foreground", profile: "worker", capabilityMode: "full" })),
 		];
-		const records = extractAskClaudeCalls(entries, "AskClaude", "SpawnClaudeAgent");
+		const records = extractAskClaudeCalls(entries, "DelegateToClaude", "SpawnClaudeAgent");
 		assert.equal(records.length, 2);
 		assert.equal(records[0].origin, undefined);
 		assert.equal(records[1].origin, "spawn-foreground");
@@ -549,22 +549,22 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 			spawnCallEntry("spawn-bg2", { task: "explore", mode: "read", execution: "background" }),
 			spawnCallEntry("spawn-fg", { task: "fix", mode: "full", execution: "foreground" }),
 		];
-		assert.equal(extractAskClaudeCalls(background, "AskClaude", "SpawnClaudeAgent").length, 1);
-		// Without the spawn tool name (restored sessions of older versions), only AskClaude records appear.
-		assert.equal(extractAskClaudeCalls(background, "AskClaude").length, 0);
+		assert.equal(extractAskClaudeCalls(background, "DelegateToClaude", "SpawnClaudeAgent").length, 1);
+		// Without the spawn tool name (restored sessions of older versions), only DelegateToClaude records appear.
+		assert.equal(extractAskClaudeCalls(background, "DelegateToClaude").length, 0);
 	});
 
-	it("labels spawn-foreground records distinctly from AskClaude compatibility calls", () => {
+	it("labels spawn-foreground records distinctly from DelegateToClaude compatibility calls", () => {
 		const [record] = extractAskClaudeCalls([
 			spawnCallEntry("spawn-1", { task: "fix", mode: "full", execution: "foreground" }),
 			spawnResultEntry("spawn-1", completedDetails({ origin: "spawn-foreground", profile: "worker" })),
-		], "AskClaude", "SpawnClaudeAgent");
+		], "DelegateToClaude", "SpawnClaudeAgent");
 		const header = buildOverlayHeaderLines(record, { index: 0, total: 1 }, theme).join("\n");
 		assert.match(header, /SpawnClaudeAgent worker \(foreground\)/);
-		assert.ok(!header.includes("AskClaude call"));
+		assert.ok(!header.includes("DelegateToClaude call"));
 
-		const [ask] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "AskClaude");
-		assert.match(buildOverlayHeaderLines(ask, { index: 0, total: 1 }, theme).join("\n"), /AskClaude call/);
+		const [ask] = extractAskClaudeCalls([callEntry("c", "p"), resultEntry("c", completedDetails())], "DelegateToClaude");
+		assert.match(buildOverlayHeaderLines(ask, { index: 0, total: 1 }, theme).join("\n"), /DelegateToClaude call/);
 	});
 
 	it("carries the labels through the live slot for a running foreground spawn call", () => {
@@ -582,7 +582,7 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 		// The live record also merges into a branch that already persisted the tool call.
 		const pending = extractAskClaudeCalls([
 			spawnCallEntry("spawn-live", { task: "live task", mode: "read", execution: "foreground" }),
-		], "AskClaude", "SpawnClaudeAgent");
+		], "DelegateToClaude", "SpawnClaudeAgent");
 		const merged = mergeLiveCall(pending, getLiveAskClaudeCall());
 		assert.equal(merged.length, 1);
 		assert.equal(merged[0].live, true);
@@ -594,7 +594,7 @@ describe("foreground SpawnClaudeAgent extraction and labels", () => {
 			spawnCallEntry("advisor", { task: "advise", mode: "none", execution: "foreground" }),
 			spawnCallEntry("review", { task: "review", mode: "read", review: {}, execution: "foreground" }),
 			spawnCallEntry("legacy", { task: "old", profile: "explorer", execution: "foreground" }),
-		], "AskClaude", "SpawnClaudeAgent");
+		], "DelegateToClaude", "SpawnClaudeAgent");
 		assert.deepEqual(records.map((record) => record.profile), ["advisor", "reviewer", "explorer"]);
 	});
 });

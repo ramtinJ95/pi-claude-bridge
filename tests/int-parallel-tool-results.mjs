@@ -32,7 +32,7 @@ function piHistoryWithParallelCall() {
 	const ids = TOKENS.map((_, i) => `toolu_par${i}`);
 	return [
 		{ role: "user", content: "Read the three token files." },
-		{ role: "assistant", provider: "claude-bridge", content: ids.map((id, i) => ({
+		{ role: "assistant", provider: "claude-delegation", content: ids.map((id, i) => ({
 			type: "toolCall", id, name: "read", arguments: { path: `token${i}.txt` },
 		})) },
 		...ids.map((id, i) => ({ role: "toolResult", toolCallId: id, content: `The token in this file is ${TOKENS[i]}.` })),

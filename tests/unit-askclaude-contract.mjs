@@ -5,7 +5,7 @@ import {
 	buildAskClaudeContract,
 } from "../src/askclaude-contract.js";
 
-describe("AskClaude model-facing contract", () => {
+describe("DelegateToClaude model-facing contract", () => {
 	it("describes the package defaults", () => {
 		const contract = buildAskClaudeContract();
 
@@ -89,7 +89,7 @@ describe("AskClaude model-facing contract", () => {
 	});
 });
 
-describe("AskClaude call tags", () => {
+describe("DelegateToClaude call tags", () => {
 	it("shows configured non-package defaults when arguments are omitted", () => {
 		const contract = buildAskClaudeContract({
 			defaultMode: "full",

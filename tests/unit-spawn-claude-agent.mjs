@@ -105,7 +105,7 @@ function execute(pi, params, { signal, ctx } = {}) {
 }
 
 describe("SpawnClaudeAgent adapter wiring", () => {
-	it("registers nothing when the AskClaude opt-in is off", () => {
+	it("registers nothing when the DelegateToClaude opt-in is off", () => {
 		const pi = fakePi();
 		registerSpawnClaudeAgent(pi, {
 			enabled: false,
@@ -260,12 +260,12 @@ describe("SpawnClaudeAgent adapter wiring", () => {
 		assert.equal(ignored, undefined);
 	});
 
-	it("keeps the claude-bridge circular-delegation block", async () => {
+	it("keeps the claude-delegation circular-delegation block", async () => {
 		const { pi, jobs, runs } = wire();
-		const result = await execute(pi, { task: "explore", mode: "read" }, { ctx: { model: { baseUrl: "claude-bridge" } } });
+		const result = await execute(pi, { task: "explore", mode: "read" }, { ctx: { model: { baseUrl: "claude-delegation" } } });
 
 		assert.equal(result.details.error, true);
-		assert.ok(result.content[0].text.includes("claude-bridge"));
+		assert.ok(result.content[0].text.includes("claude-delegation"));
 		assert.deepEqual(jobs.list(), []);
 		assert.equal(runs.length, 0);
 	});
@@ -401,7 +401,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		assert.equal(result.details.origin, "spawn-foreground");
 	});
 
-	it("forwards Pi branch context for foreground isolated=false like AskClaude shared mode", async () => {
+	it("forwards Pi branch context for foreground isolated=false like DelegateToClaude shared mode", async () => {
 		const { pi, foregroundRuns } = wire();
 		await execute(
 			pi,
@@ -550,7 +550,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 		assert.deepEqual(jobs.list(), []);
 	});
 
-	it("renders foreground results with the AskClaude renderer and background results as plain text", () => {
+	it("renders foreground results with the DelegateToClaude renderer and background results as plain text", () => {
 		const { pi } = wire();
 		const tool = pi.tools.get("SpawnClaudeAgent");
 		const theme = { fg: (_c, t) => t, bold: (t) => t };
@@ -561,7 +561,7 @@ describe("SpawnClaudeAgent execution dispatch", () => {
 			theme,
 			{},
 		);
-		// The rich AskClaude renderer returns a Container of components.
+		// The rich DelegateToClaude renderer returns a Container of components.
 		assert.equal(typeof foreground.addChild, "function");
 
 		const background = tool.renderResult(
