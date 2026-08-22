@@ -165,6 +165,9 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
   Explorer and reviewer stay structurally limited to Read, Glob, Grep,
   WebFetch, and WebSearch — no Bash, no editing, no nested agents.
 - **`execution`** — `background` (default) or `foreground`, as above.
+- **`user_requested`** — worker only; must be `true`, and may be asserted only
+  when the user explicitly asked to delegate implementation to Claude. Missing
+  or false assertions reject the worker call visibly.
 - **`isolated`** — foreground only; `true` (default) for a fresh session,
   `false` to share Pi conversation history like AskClaude.
 - **`model`** / **`thinking`** — same semantics and defaults as AskClaude.
@@ -178,13 +181,16 @@ AskClaude, with `permissionMode` taken from the same `askClaude` configuration
 - One background job runs per Pi session. A second spawn fails with a visible
   error result; it is not queued. Foreground calls do not count against this
   limit — Pi is blocked while they run.
-- **Single-writer contract for background workers:** a foreground worker is
-  naturally the only writer because Pi is blocked, but a background worker
-  edits the current checkout while the main agent keeps going. Its immediate
-  spawn result carries an explicit single-writer warning (inspect/discuss
-  only, no edits until the completion message arrives) and the live widget
-  shows a matching warning line. A dedicated git-worktree lifecycle is
-  deliberately deferred.
+- **Single-writer contract for full-capability Claude calls:** one atomic,
+  process-wide checkout lease covers background workers, foreground workers,
+  and AskClaude `mode: "full"`. A second Claude writer fails visibly, including
+  across an extension reload while an old worker has not actually settled.
+  Background worker results and the live widget also warn the main agent to
+  inspect/discuss only. The lease remains held after an `abandoned` status
+  until the executor really settles; cancellation requests cooperative
+  interrupt and immediately closes the SDK transport so a wedged interrupt
+  cannot keep editing behind a dismissed warning. A dedicated git-worktree
+  lifecycle is deliberately deferred.
 - AskClaude remains a compatibility tool for now. SpawnClaudeAgent foreground
   execution covers its blocking/live/session-sharing mechanics, but the
   profile-based API intentionally has no no-access equivalent of AskClaude's

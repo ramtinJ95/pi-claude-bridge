@@ -432,7 +432,8 @@ adding another first-class tool. Implemented (not yet runtime-dogfooded):
   removes the worker profile from the schema and rejects it at dispatch. The
   worker role prompt states the current-checkout single-writer ownership and
   forbids commit/push/PR/branch changes/destructive cleanup without explicit
-  task authorization. Its tool contract also limits worker use to explicit
+  task authorization. Its tool contract also requires the explicit structured
+  assertion `user_requested: true`, which may be supplied only for
   user-requested implementation delegation. Explorer/reviewer remain
   structurally read-only.
 - `execution: "foreground" | "background"`, defaulting to `background` to
@@ -452,10 +453,16 @@ adding another first-class tool. Implemented (not yet runtime-dogfooded):
   run in both execution modes, and launches use Pi's execute-context cwd
   (AskClaude delegation now also uses the session cwd instead of
   `process.cwd()`).
-- Background workers surface an explicit single-writer warning in their
-  immediate spawn result and a live-widget warning line; foreground workers
-  are naturally single-writer because Pi is blocked. A dedicated git-worktree
-  lifecycle remains deliberately deferred.
+- One atomic checkout write lease covers background workers, foreground
+  workers, and AskClaude full mode. It is backed by process-global state across
+  extension reloads, so a replacement runtime cannot forget an unsettled old
+  writer; another writer fails visibly. Background workers additionally
+  surface the single-writer warning in their immediate result and live widget.
+  An `abandoned` manager record does not release ownership: the lease remains
+  until the executor really settles. Delegation abort now requests cooperative
+  interrupt and immediately closes the SDK query transport, so a wedged
+  interrupt cannot leave a worker editing behind a dismissed warning. A
+  dedicated git-worktree lifecycle remains deliberately deferred.
 - `AskClaude` remains registered as a compatibility tool and now maps onto the
   same foreground implementation, preserving its mode none/read/full contract,
   configurable defaults/name/label/allowFull/appendSkills, rendering,
@@ -479,12 +486,13 @@ One policy resolver, delegation runner, retention path, and foreground UI
 adapter remain. `execution` selects orchestration and delivery; `profile`
 selects capability and role. Neither dimension owns a duplicate runner.
 
-Phase 3c validation: 438 passing unit tests (including worker policy/prompt,
+Phase 3c validation: 447 passing unit tests (including worker policy/prompt,
 schema/dispatch/invalid combinations, foreground success/failure/cancellation/
-live updates, wrapper parity, overlay extraction/labels/focus, and worker UI
-labels), clean TypeScript typecheck and `git diff --check`, and a package
-dry-run containing the changed modules. Runtime dogfooding has not happened
-yet — see the handoff below.
+live updates, wrapper parity, overlay extraction/labels/focus, worker UI labels,
+hard-close on a wedged interrupt, structured worker authorization, and the
+process-global checkout lease through abandonment/reload), clean TypeScript
+typecheck and `git diff --check`, and a package dry-run containing the changed
+modules. Runtime dogfooding has not happened yet — see the handoff below.
 
 ### Current handoff: runtime dogfooding
 
@@ -538,9 +546,12 @@ above, exercise:
 7. A real background `worker` job: the single-writer warning in the spawn
    result and widget, permission behavior under the managed sandbox policy
    (auto mode with Bash/Edit under managed settings has not been observed at
-   runtime), completion delivery, and cancellation mid-edit.
+   runtime), completion delivery, cancellation mid-edit, rejection of another
+   foreground/background/full-AskClaude writer, and lease continuity across
+   `/reload` until the old executor settles.
 8. Visible rejection of `execution="background"` with `isolated=false`, and
-   the worker profile disappearing under `allowFullMode: false`.
+   worker calls without `user_requested: true`; also confirm the worker profile
+   disappears under `allowFullMode: false`.
 
 Then run the runtime gate above against explorer, reviewer, and worker paths;
 do not begin Phase 4 by default until the evidence is recorded and any
