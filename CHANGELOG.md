@@ -4,7 +4,7 @@ The scoped `@ramtinj95/pi-claude-delegation` package starts at 0.1.0. Entries
 for `pi-claude-bridge` 0.7.0 and earlier are retained below as inherited
 upstream history under the MIT license.
 
-## UNRELEASED
+## 0.1.0 — 2026-08-22
 
 - **Add: independent package and runtime namespace** — Publish the fork as `@ramtinj95/pi-claude-delegation`; register the provider as `claude-delegation`; read `claude-delegation.json` with a `delegation` tool-config block; and expose the blocking compatibility path as `DelegateToClaude` while retaining `SpawnClaudeAgent`. Historical `claude-bridge` transcript thinking remains replayable, and the process-global checkout lease deliberately retains its legacy coordination key so an unsettled pre-migration worker still blocks a new writer. The release preserves upstream attribution and changelog history. Typecheck, unit, and package validation are clean, but the Phase 3d manual dogfood checks for reload-time worker termination and checkout-write ownership remain explicitly unrecorded.
 - **Bump: MCP SDK and audited transitive dependencies** — Raise `@modelcontextprotocol/sdk` to `^1.30.0` and refresh the lockfile within declared ranges, clearing the production dependency audit before publication.
